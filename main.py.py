@@ -11,9 +11,28 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
 
+# --- كود الاستيقاظ لـ UptimeRobot ---
+from flask import Flask
+from threading import Thread
+
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "I am alive!"
+
+def run():
+    app.run(host='0.0.0.0', port=8080)
+
+def keep_alive():
+    t = Thread(target=run)
+    t.start()
+
+keep_alive()
+# -----------------------------------
+
 import discord
 from discord.ext import commands
-
 
 DATA_FILE = Path("economy_data.json")
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
@@ -22,6 +41,8 @@ PORT = int(os.getenv("PORT", "10000"))
 ADMIN_PANEL_CHANNEL_ID = 1498037576538259556
 EVENT_PUBLIC_CHANNEL_ID = 1498037416672493829
 ADMIN_ROLE_ID = 1478970736717598840
+
+# ... بقية الكود الذي أرسلته أنت ...
 
 START_MONEY = 3000
 INVEST_COOLDOWN = 180
