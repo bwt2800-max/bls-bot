@@ -11,6 +11,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
 
+@app.route('/', methods=['GET', 'HEAD'])
 import discord
 from discord.ext import commands
 
