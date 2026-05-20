@@ -79,7 +79,7 @@ LOAN_MAX_AMOUNT = 20000
 LOAN_MIN_PAYMENT = 1000
 LOAN_DURATION_SECONDS = 3600
 LOAN_LATE_FEE = 5000
-BOT_REPLY_DELAY_SECONDS = 1
+BOT_REPLY_DELAY_SECONDS = 0.5
 
 COLOR_PRIMARY = 0x1E2124
 COLOR_SUCCESS = 0x57F287
@@ -333,6 +333,8 @@ def default_system_settings() -> dict[str, Any]:
     return {
         "auto_auction_enabled": True,
         "hidden_auction_enabled": False,
+        "scheduled_events_enabled": True,
+        "random_events_enabled": True,
         "next_auto_auction_at": next_timestamp(AUTO_AUCTION_INTERVAL_SECONDS),
         "next_hidden_auction_at": next_timestamp(HIDDEN_AUCTION_INTERVAL_SECONDS),
         "next_random_event_at": next_timestamp(RANDOM_EVENT_INTERVAL_SECONDS),
@@ -561,6 +563,18 @@ def parse_buy_sell_item(raw_name: str, member: discord.abc.User | None = None) -
     }
 
 
+def parse_sell_item(raw_name: str) -> dict[str, Any]:
+    item_key = parse_item_key(raw_name)
+    item = ITEM_DEFINITIONS[item_key]
+    return {
+        "key": item_key,
+        "label": item["label"],
+        "icon": item["icon"],
+        "buy_price": get_current_buy_price(item_key),
+        "sell_price": get_current_sell_price(item_key),
+    }
+
+
 def credit_money(user: dict[str, Any], amount: int) -> tuple[int, int]:
     if amount <= 0:
         return 0, 0
@@ -758,6 +772,24 @@ def clean_event_schedule_embed() -> discord.Embed:
     return embed
 
 
+def clean_admin_panel_embed() -> discord.Embed:
+    systems = data_store["systems"]
+    embed = base_embed(COLOR_INFO)
+    embed.title = "لوحة الإدارة"
+    embed.description = (
+        f"روم التحكم: `{ADMIN_PANEL_CHANNEL_ID}`\n"
+        f"روم الأحداث العامة: `{EVENT_PUBLIC_CHANNEL_ID}`\n"
+        f"روم جدول الأحداث: `{EVENT_SCHEDULE_CHANNEL_ID}`\n"
+        f"روم المزادات: `{AUCTION_CHANNEL_ID}`\n"
+        f"روم سوق اللاعبين: `{MARKET_CHANNEL_ID}`\n"
+        f"المزاد التلقائي: `{'شغال' if systems['auto_auction_enabled'] else 'متوقف'}`\n"
+        f"المزاد المخفي: `{'شغال' if systems['hidden_auction_enabled'] else 'متوقف'}`\n"
+        f"الأحداث المجدولة: `{'شغال' if systems['scheduled_events_enabled'] else 'متوقف'}`\n"
+        f"الأحداث العشوائية: `{'شغال' if systems['random_events_enabled'] else 'متوقف'}`"
+    )
+    return embed
+
+
 def cooldown_left(last_time: float, cooldown: int) -> int:
     return max(0, int(cooldown - (time.time() - last_time)))
 
@@ -885,6 +917,8 @@ def build_event_payload(reward_type: str, amount: int, limit: int, creator_name:
 
 async def maybe_start_random_event() -> None:
     systems = data_store["systems"]
+    if not systems.get("random_events_enabled", True):
+        return
     now = time.time()
     if now < systems["next_random_event_at"]:
         return
@@ -934,6 +968,8 @@ def parse_schedule_time(raw: str) -> tuple[int, int]:
 
 
 async def maybe_start_scheduled_events() -> None:
+    if not data_store["systems"].get("scheduled_events_enabled", True):
+        return
     if get_active_event():
         return
     now = datetime.now(TIMEZONE)
@@ -975,13 +1011,13 @@ async def update_panel_message(channel: discord.TextChannel) -> None:
     if panel_id:
         try:
             message = await channel.fetch_message(panel_id)
-            await message.edit(embed=admin_panel_embed(), view=view)
+            await message.edit(embed=clean_admin_panel_embed(), view=view)
             return
         except discord.NotFound:
             logger.info("Admin panel message not found, creating a new one.")
         except discord.HTTPException:
             logger.exception("Failed to update admin panel message.")
-    message = await delayed_send(channel, embed=admin_panel_embed(), view=view)
+    message = await delayed_send(channel, embed=clean_admin_panel_embed(), view=view)
     data_store["panel_message_id"] = message.id
     mark_dirty()
 
@@ -2147,6 +2183,32 @@ class AdminPanelView(discord.ui.View):
         )
 
 
+    @discord.ui.button(label="تشغيل/إيقاف المجدول", style=discord.ButtonStyle.success, custom_id="panel_toggle_scheduled", row=3)
+    async def toggle_scheduled_events(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        if not await self.ensure_admin(interaction):
+            return
+        systems = data_store["systems"]
+        systems["scheduled_events_enabled"] = not systems.get("scheduled_events_enabled", True)
+        mark_dirty()
+        await refresh_admin_room_panels()
+        await delayed_interaction_send(
+            interaction,
+            content=f"الأحداث المجدولة الآن: `{'شغال' if systems['scheduled_events_enabled'] else 'متوقف'}`",
+        )
+
+    @discord.ui.button(label="تشغيل/إيقاف العشوائي", style=discord.ButtonStyle.secondary, custom_id="panel_toggle_random", row=3)
+    async def toggle_random_events(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        if not await self.ensure_admin(interaction):
+            return
+        systems = data_store["systems"]
+        systems["random_events_enabled"] = not systems.get("random_events_enabled", True)
+        mark_dirty()
+        await refresh_admin_room_panels()
+        await delayed_interaction_send(
+            interaction,
+            content=f"الأحداث العشوائية الآن: `{'شغال' if systems['random_events_enabled'] else 'متوقف'}`",
+        )
+
 async def maybe_auto_update_prices() -> None:
     changed = False
     now = time.time()
@@ -2492,7 +2554,7 @@ async def on_message(message: discord.Message) -> None:
         if cmd == "بيع":
             if len(args) < 3:
                 raise ValueError("اكتب: بيع <العنصر> <الكمية/كل>")
-            item = parse_buy_sell_item(args[1], message.author)
+            item = parse_sell_item(args[1])
             owned = user[item["key"]]
             quantity = owned if args[2] == "كل" else parse_amount(args[2])
             if quantity > owned:
