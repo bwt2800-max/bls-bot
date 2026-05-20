@@ -121,7 +121,9 @@ ITEM_DEFINITIONS = {
         "delta_min": 100,
         "delta_max": 3500,
         "roulette_chance": None,
+        "sellable": True,
     },
+
     "diamonds": {
         "label": "ألماس",
         "icon": "💎",
@@ -136,7 +138,9 @@ ITEM_DEFINITIONS = {
         "delta_min": 200,
         "delta_max": 5000,
         "roulette_chance": None,
+        "sellable": True,
     },
+
     "lands": {
         "label": "أرض",
         "icon": "🏝️",
@@ -151,7 +155,9 @@ ITEM_DEFINITIONS = {
         "delta_min": 500,
         "delta_max": 6000,
         "roulette_chance": None,
+        "sellable": True,
     },
+
     "stocks": {
         "label": "أسهم",
         "icon": "📈",
@@ -166,7 +172,9 @@ ITEM_DEFINITIONS = {
         "delta_min": 100,
         "delta_max": 8000,
         "roulette_chance": "العادي",
+        "sellable": True,
     },
+
     "almarai_stock": {
         "label": "سهم المراعي",
         "icon": "🥛",
@@ -174,7 +182,9 @@ ITEM_DEFINITIONS = {
         "fixed_sell": 250000,
         "color": COLOR_SUCCESS,
         "roulette_chance": "1%",
+        "sellable": True,
     },
+
     "naseej_stock": {
         "label": "سهم ناسة",
         "icon": "🏙️",
@@ -182,7 +192,9 @@ ITEM_DEFINITIONS = {
         "fixed_sell": 900000,
         "color": COLOR_INFO,
         "roulette_chance": "0.5%",
+        "sellable": True,
     },
+
     "sabic_stock": {
         "label": "سهم سابك",
         "icon": "🏭",
@@ -190,7 +202,9 @@ ITEM_DEFINITIONS = {
         "fixed_sell": 850000,
         "color": COLOR_WARNING,
         "roulette_chance": "0.3%",
+        "sellable": True,
     },
+
     "aramco_stock": {
         "label": "سهم أرامكو",
         "icon": "🛢️",
@@ -198,8 +212,9 @@ ITEM_DEFINITIONS = {
         "fixed_sell": 1000000,
         "color": COLOR_GOLD,
         "roulette_chance": None,
-        "admin_only": True,
+        "sellable": True,
     },
+
     "companies": {
         "label": "شركة",
         "icon": "🏢",
@@ -207,6 +222,7 @@ ITEM_DEFINITIONS = {
         "fixed_sell": COMPANY_PRICE,
         "color": COLOR_INFO,
         "roulette_chance": None,
+        "sellable": True,
     },
 }
 
