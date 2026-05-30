@@ -7,10 +7,8 @@ import random
 import threading
 import time
 import uuid
-from datetime import datetime
 from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from flask import Flask
 
@@ -48,7 +46,6 @@ load_env_file()
 DATA_FILE = Path("economy_data.json")
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 PORT = int(os.getenv("PORT", "10000"))
-TIMEZONE = ZoneInfo("Asia/Riyadh")
 
 ADMIN_PANEL_CHANNEL_ID = 1498037576538259556
 EVENT_PUBLIC_CHANNEL_ID = 1498037416672493829
@@ -59,11 +56,11 @@ ADMIN_ROLE_ID = 1478970736717598840
 
 START_MONEY = 3000
 INVEST_COOLDOWN = 180
+GLOBAL_INVEST_COOLDOWN = 300
 TRADE_COOLDOWN = 180
 STEAL_COOLDOWN = 300
 STEAL_PROTECTED_COST = 500
-DAILY_COOLDOWN = 86400
-ROULETTE_COOLDOWN = 600
+ROULETTE_COOLDOWN = 180
 EVENT_DURATION_SECONDS = 1800
 PROTECTION_COST = 10000
 PROTECTION_DURATION_SECONDS = 7200
@@ -74,12 +71,18 @@ RANDOM_EVENT_INTERVAL_SECONDS = 180
 AUCTION_DURATION_SECONDS = 300
 AUCTION_COUNTDOWN_SECONDS = 5
 AUCTION_BID_CONFIRM_DELETE_AFTER = 60
-COMPANY_PRICE = 250000
+COMPANY_PRICE = 10_000_000
+COMPANY_HOURLY_INCOME = 1_000_000
+COMPANY_INCOME_INTERVAL_SECONDS = 3600
 LOAN_MAX_AMOUNT = 20000
 LOAN_MIN_PAYMENT = 1000
 LOAN_DURATION_SECONDS = 3600
 LOAN_LATE_FEE = 5000
 BOT_REPLY_DELAY_SECONDS = 0.3
+JOB_COOLDOWN_SECONDS = 5 * 3600
+JOB_RAISE_AMOUNT = 200
+MARKET_STOCK_BONUS_MIN = 1
+MARKET_STOCK_BONUS_MAX = 1000
 
 COLOR_PRIMARY = 0x1E2124
 COLOR_SUCCESS = 0x57F287
@@ -90,6 +93,12 @@ COLOR_GOLD = 0xF1C40F
 COLOR_LAND = 0x3BA55D
 COLOR_STOCK = 0x11806A
 COLOR_SECRET = 0x2F3136
+
+JOBS = {
+    "عسكري": {"salary": 2000, "aliases": {"عسكري", "العسكري"}},
+    "دكتور": {"salary": 2500, "aliases": {"دكتور", "طبيب", "الطبيب", "الدكتور"}},
+    "طيار": {"salary": 3000, "aliases": {"طيار", "الطيار"}},
+}
 
 app = Flask(__name__)
 
@@ -103,7 +112,7 @@ def run_web() -> None:
     app.run(host="0.0.0.0", port=PORT)
 
 
-threading.Thread(target=run_web).start()
+threading.Thread(target=run_web, daemon=True).start()
 
 
 ITEM_DEFINITIONS = {
@@ -123,7 +132,6 @@ ITEM_DEFINITIONS = {
         "roulette_chance": None,
         "sellable": True,
     },
-
     "diamonds": {
         "label": "ألماس",
         "icon": "💎",
@@ -140,7 +148,6 @@ ITEM_DEFINITIONS = {
         "roulette_chance": None,
         "sellable": True,
     },
-
     "lands": {
         "label": "أرض",
         "icon": "🏝️",
@@ -157,7 +164,6 @@ ITEM_DEFINITIONS = {
         "roulette_chance": None,
         "sellable": True,
     },
-
     "stocks": {
         "label": "أسهم",
         "icon": "📈",
@@ -171,50 +177,54 @@ ITEM_DEFINITIONS = {
         "update_seconds": PRICE_UPDATE_SECONDS,
         "delta_min": 100,
         "delta_max": 8000,
-        "roulette_chance": "العادي",
+        "roulette_chance": "عادي",
         "sellable": True,
     },
-
     "almarai_stock": {
         "label": "سهم المراعي",
         "icon": "🥛",
         "fixed_buy": 250000,
         "fixed_sell": 250000,
         "color": COLOR_SUCCESS,
-        "roulette_chance": "1%",
+        "roulette_chance": "0.1%",
         "sellable": True,
     },
-
     "naseej_stock": {
         "label": "سهم ناسة",
         "icon": "🏙️",
-        "fixed_buy": 900000,
-        "fixed_sell": 900000,
+        "fixed_buy": 12_000_000,
+        "fixed_sell": 12_000_000,
         "color": COLOR_INFO,
-        "roulette_chance": "0.5%",
+        "roulette_chance": "0.1%",
         "sellable": True,
     },
-
     "sabic_stock": {
         "label": "سهم سابك",
         "icon": "🏭",
-        "fixed_buy": 850000,
-        "fixed_sell": 850000,
+        "fixed_buy": 10_000_000,
+        "fixed_sell": 10_000_000,
         "color": COLOR_WARNING,
-        "roulette_chance": "0.3%",
+        "roulette_chance": "0.1%",
         "sellable": True,
     },
-
     "aramco_stock": {
         "label": "سهم أرامكو",
         "icon": "🛢️",
-        "fixed_buy": 1000000,
-        "fixed_sell": 1000000,
+        "fixed_buy": 100_000_000,
+        "fixed_sell": 100_000_000,
         "color": COLOR_GOLD,
-        "roulette_chance": None,
+        "roulette_chance": "0.1%",
         "sellable": True,
     },
-
+    "bls_stock": {
+        "label": "سهم BLS",
+        "icon": "👑",
+        "fixed_buy": 50_000_000,
+        "fixed_sell": 50_000_000,
+        "color": COLOR_SECRET,
+        "roulette_chance": "مستحيل",
+        "sellable": True,
+    },
     "companies": {
         "label": "شركة",
         "icon": "🏢",
@@ -227,8 +237,9 @@ ITEM_DEFINITIONS = {
 }
 
 BUYABLE_DYNAMIC_ITEMS = ("gold", "diamonds", "lands", "stocks")
-FIXED_STOCK_ITEMS = ("almarai_stock", "naseej_stock", "sabic_stock", "aramco_stock")
-MARKET_ALLOWED_ITEMS = ("gold", "diamonds", "lands", "stocks", "almarai_stock", "naseej_stock", "sabic_stock", "aramco_stock", "companies")
+FIXED_STOCK_ITEMS = ("almarai_stock", "naseej_stock", "sabic_stock", "aramco_stock", "bls_stock")
+SELLABLE_ITEMS = BUYABLE_DYNAMIC_ITEMS + FIXED_STOCK_ITEMS + ("companies",)
+MARKET_ALLOWED_ITEMS = SELLABLE_ITEMS
 
 ITEM_ALIASES = {
     "ذهب": "gold",
@@ -248,6 +259,7 @@ ITEM_ALIASES = {
     "stocks": "stocks",
     "سهم المراعي": "almarai_stock",
     "المراعي": "almarai_stock",
+    "مراعي": "almarai_stock",
     "almarai": "almarai_stock",
     "سهم ناسة": "naseej_stock",
     "ناسة": "naseej_stock",
@@ -261,6 +273,9 @@ ITEM_ALIASES = {
     "ارامكو": "aramco_stock",
     "أرامكو": "aramco_stock",
     "aramco": "aramco_stock",
+    "سهم bls": "bls_stock",
+    "bls": "bls_stock",
+    "بي ال اس": "bls_stock",
     "شركة": "companies",
     "شركه": "companies",
     "company": "companies",
@@ -277,12 +292,10 @@ EVENT_REWARD_TYPES = {
     "naseej_stock": {"label": "سهم ناسة", "key": "naseej_stock", "icon": "🏙️", "color": COLOR_INFO},
     "sabic_stock": {"label": "سهم سابك", "key": "sabic_stock", "icon": "🏭", "color": COLOR_WARNING},
     "aramco_stock": {"label": "سهم أرامكو", "key": "aramco_stock", "icon": "🛢️", "color": COLOR_GOLD},
+    "bls_stock": {"label": "سهم BLS", "key": "bls_stock", "icon": "👑", "color": COLOR_SECRET},
 }
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
 logger = logging.getLogger("bls-economy")
 
 intents = discord.Intents.default()
@@ -308,40 +321,18 @@ def mark_dirty() -> None:
     dirty_data = True
 
 
-def build_default_prices() -> dict[str, dict[str, int]]:
-    prices: dict[str, dict[str, int]] = {}
-    for key in BUYABLE_DYNAMIC_ITEMS:
-        item = ITEM_DEFINITIONS[key]
-        prices[key] = {
-            "buy_price": item["base_buy"],
-            "sell_price": item["base_sell"],
-            "last_update": 0,
-        }
-    return prices
-
-
 def next_timestamp(seconds: int) -> int:
     return int(time.time()) + seconds
 
 
-def default_event_schedule() -> dict[str, Any]:
+def build_default_prices() -> dict[str, dict[str, int]]:
     return {
-        "friday": {
-            "enabled": True,
-            "time": "16:00",
-            "reward_type": "money",
-            "amount": 2000,
-            "limit": 20,
-            "last_run_date": "",
-        },
-        "saturday": {
-            "enabled": True,
-            "time": "16:00",
-            "reward_type": "gold",
-            "amount": 2,
-            "limit": 15,
-            "last_run_date": "",
-        },
+        key: {
+            "buy_price": ITEM_DEFINITIONS[key]["base_buy"],
+            "sell_price": ITEM_DEFINITIONS[key]["base_sell"],
+            "last_update": 0,
+        }
+        for key in BUYABLE_DYNAMIC_ITEMS
     }
 
 
@@ -349,12 +340,11 @@ def default_system_settings() -> dict[str, Any]:
     return {
         "auto_auction_enabled": True,
         "hidden_auction_enabled": False,
-        "scheduled_events_enabled": True,
         "random_events_enabled": True,
+        "bot_paused": False,
         "next_auto_auction_at": next_timestamp(AUTO_AUCTION_INTERVAL_SECONDS),
         "next_hidden_auction_at": next_timestamp(HIDDEN_AUCTION_INTERVAL_SECONDS),
         "next_random_event_at": next_timestamp(RANDOM_EVENT_INTERVAL_SECONDS),
-        "last_schedule_post_date": "",
     }
 
 
@@ -364,16 +354,13 @@ def load_data() -> dict[str, Any]:
         "active_event": None,
         "panel_message_id": None,
         "price_panel_message_id": None,
-        "event_schedule_message_id": None,
         "prices": build_default_prices(),
         "auctions": {},
         "market_listings": {},
         "systems": default_system_settings(),
-        "event_schedule": default_event_schedule(),
     }
     if not DATA_FILE.exists():
         return defaults
-
     try:
         with DATA_FILE.open("r", encoding="utf-8") as file:
             data = json.load(file)
@@ -383,17 +370,14 @@ def load_data() -> dict[str, Any]:
 
     for key, value in defaults.items():
         data.setdefault(key, value)
-
     data["systems"] = {**default_system_settings(), **data.get("systems", {})}
-    data["event_schedule"] = {
-        "friday": {**default_event_schedule()["friday"], **data.get("event_schedule", {}).get("friday", {})},
-        "saturday": {**default_event_schedule()["saturday"], **data.get("event_schedule", {}).get("saturday", {})},
-    }
+    data.pop("event_schedule", None)
+    data.pop("event_schedule_message_id", None)
     for item_key, item_prices in build_default_prices().items():
-        existing = data["prices"].setdefault(item_key, item_prices)
-        existing.setdefault("buy_price", item_prices["buy_price"])
-        existing.setdefault("sell_price", item_prices["sell_price"])
-        existing.setdefault("last_update", 0)
+        current = data["prices"].setdefault(item_key, item_prices)
+        current.setdefault("buy_price", item_prices["buy_price"])
+        current.setdefault("sell_price", item_prices["sell_price"])
+        current.setdefault("last_update", 0)
     return data
 
 
@@ -405,15 +389,12 @@ def ensure_state() -> None:
     data_store.setdefault("active_event", None)
     data_store.setdefault("panel_message_id", None)
     data_store.setdefault("price_panel_message_id", None)
-    data_store.setdefault("event_schedule_message_id", None)
     data_store.setdefault("prices", build_default_prices())
     data_store.setdefault("auctions", {})
     data_store.setdefault("market_listings", {})
     data_store["systems"] = {**default_system_settings(), **data_store.get("systems", {})}
-    data_store["event_schedule"] = {
-        "friday": {**default_event_schedule()["friday"], **data_store.get("event_schedule", {}).get("friday", {})},
-        "saturday": {**default_event_schedule()["saturday"], **data_store.get("event_schedule", {}).get("saturday", {})},
-    }
+    data_store.pop("event_schedule", None)
+    data_store.pop("event_schedule_message_id", None)
     for item_key, item_prices in build_default_prices().items():
         current = data_store["prices"].setdefault(item_key, item_prices)
         current.setdefault("buy_price", item_prices["buy_price"])
@@ -456,11 +437,16 @@ def create_user(user_id: int) -> dict[str, Any]:
         "naseej_stock": 0,
         "sabic_stock": 0,
         "aramco_stock": 0,
+        "bls_stock": 0,
         "lastInvest": 0,
+        "lastGlobalInvest": 0,
         "lastTrade": 0,
         "lastSteal": 0,
-        "lastDaily": 0,
         "lastRoulette": 0,
+        "lastJobSalary": 0,
+        "lastCompanyIncome": time.time(),
+        "job": None,
+        "jobRaise": 0,
         "protectionUntil": 0,
         "loan": None,
     }
@@ -472,11 +458,25 @@ def get_user(user_id: int) -> dict[str, Any]:
         data_store["users"][key] = create_user(user_id)
         mark_dirty()
     user = data_store["users"][key]
-    for field in ("stocks", "companies", "loan", "gold", "diamonds", "lands", "almarai_stock", "naseej_stock", "sabic_stock", "aramco_stock"):
-        if field == "loan":
-            user.setdefault(field, None)
-        else:
-            user.setdefault(field, 0)
+    for field in (
+        "gold",
+        "diamonds",
+        "lands",
+        "stocks",
+        "companies",
+        "almarai_stock",
+        "naseej_stock",
+        "sabic_stock",
+        "aramco_stock",
+        "bls_stock",
+    ):
+        user.setdefault(field, 0)
+    user.setdefault("loan", None)
+    user.setdefault("job", None)
+    user.setdefault("jobRaise", 0)
+    user.setdefault("lastJobSalary", 0)
+    user.setdefault("lastCompanyIncome", time.time())
+    user.setdefault("lastGlobalInvest", 0)
     return user
 
 
@@ -522,8 +522,34 @@ def format_wait(seconds: int) -> str:
     return " و ".join(parts)
 
 
-def get_item_meta(item_key: str) -> dict[str, Any]:
-    return ITEM_DEFINITIONS[item_key]
+def parse_amount(raw: str) -> int:
+    if not raw.isdigit():
+        raise ValueError("الكمية لازم تكون رقم صحيح.")
+    amount = int(raw)
+    if amount <= 0:
+        raise ValueError("الكمية لازم تكون أكبر من 0.")
+    return amount
+
+
+def normalize_item_name(parts: list[str]) -> str:
+    return " ".join(parts).strip().lower()
+
+
+def parse_item_key(raw_name: str) -> str:
+    item_key = ITEM_ALIASES.get(raw_name.strip().lower())
+    if not item_key:
+        raise ValueError("العنصر غير معروف.")
+    return item_key
+
+
+def parse_item_and_amount(args: list[str]) -> tuple[str, int | str]:
+    if len(args) < 2:
+        raise ValueError("اكتب العنصر والكمية.")
+    amount_raw = args[-1]
+    item_name = normalize_item_name(args[:-1])
+    item_key = parse_item_key(item_name)
+    amount: int | str = "كل" if amount_raw == "كل" else parse_amount(amount_raw)
+    return item_key, amount
 
 
 def get_price(item_key: str) -> dict[str, int]:
@@ -540,55 +566,6 @@ def get_current_sell_price(item_key: str) -> int:
     if item_key in data_store["prices"]:
         return get_price(item_key)["sell_price"]
     return ITEM_DEFINITIONS[item_key]["fixed_sell"]
-
-
-def parse_amount(raw: str) -> int:
-    if not raw.isdigit():
-        raise ValueError("الكمية لازم تكون رقم صحيح.")
-    amount = int(raw)
-    if amount <= 0:
-        raise ValueError("الكمية لازم تكون أكبر من 0.")
-    return amount
-
-
-def parse_item_key(raw_name: str) -> str:
-    item_key = ITEM_ALIASES.get(raw_name.strip().lower())
-    if not item_key:
-        raise ValueError("العنصر غير معروف.")
-    return item_key
-
-
-def can_use_admin_only_item(item_key: str, member: discord.abc.User) -> bool:
-    item = ITEM_DEFINITIONS[item_key]
-    if not item.get("admin_only"):
-        return True
-    return isinstance(member, discord.Member) and has_admin_access(member)
-
-
-def parse_buy_sell_item(raw_name: str, member: discord.abc.User | None = None) -> dict[str, Any]:
-    item_key = parse_item_key(raw_name)
-    if member is not None and not can_use_admin_only_item(item_key, member):
-        raise ValueError("هذا العنصر مخصص للإدارة فقط.")
-    item = ITEM_DEFINITIONS[item_key]
-    return {
-        "key": item_key,
-        "label": item["label"],
-        "icon": item["icon"],
-        "buy_price": get_current_buy_price(item_key),
-        "sell_price": get_current_sell_price(item_key),
-    }
-
-
-def parse_sell_item(raw_name: str) -> dict[str, Any]:
-    item_key = parse_item_key(raw_name)
-    item = ITEM_DEFINITIONS[item_key]
-    return {
-        "key": item_key,
-        "label": item["label"],
-        "icon": item["icon"],
-        "buy_price": get_current_buy_price(item_key),
-        "sell_price": get_current_sell_price(item_key),
-    }
 
 
 def credit_money(user: dict[str, Any], amount: int) -> tuple[int, int]:
@@ -623,20 +600,12 @@ def recalculate_sell_price(item_key: str, buy_price: int) -> int:
     return max(step, sell_price)
 
 
-def random_price_change(item_key: str) -> int:
-    item = ITEM_DEFINITIONS[item_key]
-    delta = random.randint(item["delta_min"], item["delta_max"])
-    direction = random.choice((-1, 1))
-    return delta * direction
-
-
 def adjust_price_by_amount(item_key: str, amount_change: int) -> tuple[int, int]:
     item = ITEM_DEFINITIONS[item_key]
     current = get_price(item_key)
     step = item["step"]
     rounded_change = int(round(amount_change / step) * step)
-    new_buy = current["buy_price"] + rounded_change
-    new_buy = max(item["min_buy"], min(item["max_buy"], new_buy))
+    new_buy = max(item["min_buy"], min(item["max_buy"], current["buy_price"] + rounded_change))
     new_sell = recalculate_sell_price(item_key, new_buy)
     current["buy_price"] = new_buy
     current["sell_price"] = new_sell
@@ -646,7 +615,9 @@ def adjust_price_by_amount(item_key: str, amount_change: int) -> tuple[int, int]
 
 
 def adjust_price_auto(item_key: str) -> tuple[int, int]:
-    return adjust_price_by_amount(item_key, random_price_change(item_key))
+    item = ITEM_DEFINITIONS[item_key]
+    delta = random.randint(item["delta_min"], item["delta_max"]) * random.choice((-1, 1))
+    return adjust_price_by_amount(item_key, delta)
 
 
 def format_prices_lines() -> str:
@@ -654,19 +625,14 @@ def format_prices_lines() -> str:
     for item_key in BUYABLE_DYNAMIC_ITEMS:
         item = ITEM_DEFINITIONS[item_key]
         price = get_price(item_key)
-        extra = ""
-        if item.get("roulette_chance"):
-            extra = f" | روليت: `{item['roulette_chance']}`"
-        lines.append(
-            f"{item['icon']} {item['label']}: شراء `{price['buy_price']}` | بيع `{price['sell_price']}`{extra}"
-        )
-    for item_key in ("almarai_stock", "naseej_stock", "sabic_stock", "aramco_stock"):
+        extra = f" | روليت: `{item['roulette_chance']}`" if item.get("roulette_chance") else ""
+        lines.append(f"{item['icon']} {item['label']}: شراء `{price['buy_price']}` | بيع `{price['sell_price']}`{extra}")
+    for item_key in FIXED_STOCK_ITEMS:
         item = ITEM_DEFINITIONS[item_key]
-        chance = f" | روليت: `{item['roulette_chance']}`" if item.get("roulette_chance") else ""
-        admin_tag = " | إداري فقط" if item.get("admin_only") else ""
         lines.append(
-            f"{item['icon']} {item['label']}: شراء `{item['fixed_buy']}` | بيع `{item['fixed_sell']}`{chance}{admin_tag}"
+            f"{item['icon']} {item['label']}: شراء `{item['fixed_buy']}` | بيع `{item['fixed_sell']}` | روليت: `{item['roulette_chance']}`"
         )
+    lines.append(f"🏢 شركة: شراء `{COMPANY_PRICE}` | دخل كل ساعة `{COMPANY_HOURLY_INCOME}` لكل شركة")
     return "\n".join(lines)
 
 
@@ -676,14 +642,12 @@ def shop_embed() -> discord.Embed:
     embed.description = (
         f"{format_prices_lines()}\n\n"
         "الأسعار المتغيرة تتحدث تلقائيًا كل 10 دقائق.\n"
-        "أمر `متجر` يفتح لك سوق اللاعبين للبيع المباشر."
+        "أمر `متجر` يفتح سوق اللاعبين. عند بيع الأسهم في السوق، المشتري ممكن يأخذ بونس عشوائي."
     )
     return embed
 
 
 def dashboard_embed(user: dict[str, Any], member: discord.abc.User) -> discord.Embed:
-    embed = base_embed(COLOR_INFO)
-    embed.title = "لوحة ممتلكاتك"
     protection_left = max(0, int(user.get("protectionUntil", 0) - time.time()))
     loan = user.get("loan")
     if loan:
@@ -692,6 +656,10 @@ def dashboard_embed(user: dict[str, Any], member: discord.abc.User) -> discord.E
         loan_text = f"رصيد سالب `{abs(user['money'])}`"
     else:
         loan_text = "لا يوجد"
+    job_text = user.get("job") or "لم تختر وظيفة"
+    salary_bonus = user.get("jobRaise", 0)
+    embed = base_embed(COLOR_INFO)
+    embed.title = "لوحة ممتلكاتك"
     embed.description = (
         f"💵 المال: `{user['money']}`\n"
         f"🥇 الذهب: `{user['gold']}`\n"
@@ -702,7 +670,9 @@ def dashboard_embed(user: dict[str, Any], member: discord.abc.User) -> discord.E
         f"🏙️ سهم ناسة: `{user['naseej_stock']}`\n"
         f"🏭 سهم سابك: `{user['sabic_stock']}`\n"
         f"🛢️ سهم أرامكو: `{user['aramco_stock']}`\n"
+        f"👑 سهم BLS: `{user['bls_stock']}`\n"
         f"🏢 الشركات: `{user['companies']}`\n"
+        f"💼 الوظيفة: `{job_text}` | زيادة الراتب: `{salary_bonus}`\n"
         f"🏦 القرض/الدين: {loan_text}\n"
         f"🛡️ الحماية: {'لا توجد حماية' if protection_left <= 0 else f'مفعلة لمدة `{format_wait(protection_left)}`'}"
     )
@@ -712,17 +682,19 @@ def dashboard_embed(user: dict[str, Any], member: discord.abc.User) -> discord.E
 
 def admin_panel_embed() -> discord.Embed:
     systems = data_store["systems"]
-    embed = base_embed(COLOR_INFO)
+    paused = systems.get("bot_paused", False)
+    embed = base_embed(COLOR_DANGER if paused else COLOR_INFO)
     embed.title = "لوحة الإدارة"
     embed.description = (
+        f"حالة البوت: `{'موقوف خاص' if paused else 'شغال'}`\n"
         f"روم التحكم: `{ADMIN_PANEL_CHANNEL_ID}`\n"
         f"روم الأحداث العامة: `{EVENT_PUBLIC_CHANNEL_ID}`\n"
-        f"روم جدول الأحداث: `{EVENT_SCHEDULE_CHANNEL_ID}`\n"
         f"روم المزادات: `{AUCTION_CHANNEL_ID}`\n"
         f"روم سوق اللاعبين: `{MARKET_CHANNEL_ID}`\n"
         f"المزاد التلقائي: `{'شغال' if systems['auto_auction_enabled'] else 'متوقف'}`\n"
         f"المزاد المخفي: `{'شغال' if systems['hidden_auction_enabled'] else 'متوقف'}`\n"
-        "الأحداث العشوائية تحاول العمل كل 3 دقائق عند عدم وجود حدث نشط."
+        f"الأحداث العشوائية: `{'شغال' if systems['random_events_enabled'] else 'متوقف'}`\n"
+        "تم حذف نظام أحداث الأسبوع بالكامل."
     )
     return embed
 
@@ -730,79 +702,7 @@ def admin_panel_embed() -> discord.Embed:
 def price_panel_embed() -> discord.Embed:
     embed = base_embed(COLOR_GOLD)
     embed.title = "لوحة التحكم بالأسعار"
-    embed.description = (
-        f"{format_prices_lines()}\n\n"
-        "كل زر يفتح لك نافذة تكتب فيها مقدار الرفع أو التنزيل بنفسك."
-    )
-    return embed
-
-
-def event_schedule_embed() -> discord.Embed:
-    schedule = data_store["event_schedule"]
-    embed = base_embed(COLOR_INFO)
-    embed.title = "جدول أحداث العقار"
-    friday = schedule["friday"]
-    saturday = schedule["saturday"]
-    f_reward = EVENT_REWARD_TYPES[friday["reward_type"]]["label"]
-    s_reward = EVENT_REWARD_TYPES[saturday["reward_type"]]["label"]
-    embed.description = (
-        f"📅 الجمعة: `{friday['time']}` | الجائزة: `{friday['amount']} {f_reward}` | العدد: `{friday['limit']}`\n"
-        f"📅 السبت: `{saturday['time']}` | الجائزة: `{saturday['amount']} {s_reward}` | العدد: `{saturday['limit']}`\n\n"
-        "مدة كل حدث: `30 دقيقة`\n"
-        f"روم استلام الأحداث: `{EVENT_PUBLIC_CHANNEL_ID}`"
-    )
-    return embed
-
-
-def event_post_embed(event: dict[str, Any]) -> discord.Embed:
-    reward = EVENT_REWARD_TYPES[event["reward_type"]]
-    remaining_time = max(0, int(event["expires_at"] - time.time()))
-    embed = base_embed(reward["color"])
-    embed.title = "حدث خاص"
-    claimed_count = len(event.get("claimed_by", []))
-    embed.description = (
-        f"{reward['icon']} الجائزة لكل شخص: `{event['amount']}` {reward['label']}\n"
-        f"🎟️ المقاعد المتبقية: `{event['remaining']}`\n"
-        f"✅ عدد المستلمين: `{claimed_count}`\n"
-        f"⏳ الوقت المتبقي: `{format_wait(remaining_time)}`\n"
-        f"👤 المنشئ: `{event['creator_name']}`"
-    )
-    return embed
-
-
-def clean_event_schedule_embed() -> discord.Embed:
-    schedule = data_store["event_schedule"]
-    embed = base_embed(COLOR_INFO)
-    embed.title = "جدول أحداث العقار"
-    friday = schedule["friday"]
-    saturday = schedule["saturday"]
-    f_reward = EVENT_REWARD_TYPES[friday["reward_type"]]["label"]
-    s_reward = EVENT_REWARD_TYPES[saturday["reward_type"]]["label"]
-    embed.description = (
-        "يتم نشر جدول الأحداث يوميًا الساعة `5:00 ص`\n"
-        f"📅 الجمعة: `{friday['time']}` | الجائزة: `{friday['amount']} {f_reward}` | العدد: `{friday['limit']}`\n"
-        f"📅 السبت: `{saturday['time']}` | الجائزة: `{saturday['amount']} {s_reward}` | العدد: `{saturday['limit']}`\n\n"
-        "مدة كل حدث: `30 دقيقة`\n"
-        f"روم استلام الأحداث: `{EVENT_PUBLIC_CHANNEL_ID}`"
-    )
-    return embed
-
-
-def clean_admin_panel_embed() -> discord.Embed:
-    systems = data_store["systems"]
-    embed = base_embed(COLOR_INFO)
-    embed.title = "لوحة الإدارة"
-    embed.description = (
-        f"روم التحكم: `{ADMIN_PANEL_CHANNEL_ID}`\n"
-        f"روم الأحداث العامة: `{EVENT_PUBLIC_CHANNEL_ID}`\n"
-        f"روم جدول الأحداث: `{EVENT_SCHEDULE_CHANNEL_ID}`\n"
-        f"روم المزادات: `{AUCTION_CHANNEL_ID}`\n"
-        f"روم سوق اللاعبين: `{MARKET_CHANNEL_ID}`\n"
-        f"المزاد التلقائي: `{'شغال' if systems['auto_auction_enabled'] else 'متوقف'}`\n"
-        f"المزاد المخفي: `{'شغال' if systems['hidden_auction_enabled'] else 'متوقف'}`\n"
-        f"الأحداث المجدولة: `{'شغال' if systems['scheduled_events_enabled'] else 'متوقف'}`\n"
-        f"الأحداث العشوائية: `{'شغال' if systems['random_events_enabled'] else 'متوقف'}`"
-    )
+    embed.description = f"{format_prices_lines()}\n\nكل زر يفتح نافذة لتغيير السعر."
     return embed
 
 
@@ -812,7 +712,7 @@ def cooldown_left(last_time: float, cooldown: int) -> int:
 
 def estimate_user_total_value(user: dict[str, Any]) -> int:
     total = user["money"]
-    for item_key in ("gold", "diamonds", "lands", "stocks", "almarai_stock", "naseej_stock", "sabic_stock", "aramco_stock"):
+    for item_key in BUYABLE_DYNAMIC_ITEMS + FIXED_STOCK_ITEMS:
         total += user.get(item_key, 0) * get_current_sell_price(item_key)
     total += user.get("companies", 0) * COMPANY_PRICE
     return total
@@ -828,14 +728,27 @@ async def delayed_send(channel: discord.abc.Messageable, **kwargs: Any) -> disco
     return await channel.send(**kwargs)
 
 
-async def delayed_interaction_send(interaction: discord.Interaction, *, content: str | None = None, embed: discord.Embed | None = None, ephemeral: bool = True, view: discord.ui.View | None = None) -> None:
+async def delayed_interaction_send(
+    interaction: discord.Interaction,
+    *,
+    content: str | None = None,
+    embed: discord.Embed | None = None,
+    ephemeral: bool = True,
+    view: discord.ui.View | None = None,
+) -> None:
     if not interaction.response.is_done():
         await interaction.response.defer(ephemeral=ephemeral)
     await asyncio.sleep(BOT_REPLY_DELAY_SECONDS)
     await interaction.followup.send(content=content, embed=embed, ephemeral=ephemeral, view=view)
 
 
-async def delayed_interaction_edit(interaction: discord.Interaction, *, content: str | None = None, embed: discord.Embed | None = None, view: discord.ui.View | None = None) -> None:
+async def delayed_interaction_edit(
+    interaction: discord.Interaction,
+    *,
+    content: str | None = None,
+    embed: discord.Embed | None = None,
+    view: discord.ui.View | None = None,
+) -> None:
     if not interaction.response.is_done():
         await interaction.response.defer()
     await asyncio.sleep(BOT_REPLY_DELAY_SECONDS)
@@ -882,6 +795,35 @@ async def clear_active_event(reason: str = "انتهى الحدث.") -> None:
     event_cleanup_task = None
 
 
+def event_post_embed(event: dict[str, Any]) -> discord.Embed:
+    reward = EVENT_REWARD_TYPES[event["reward_type"]]
+    remaining_time = max(0, int(event["expires_at"] - time.time()))
+    embed = base_embed(reward["color"])
+    embed.title = "حدث عشوائي"
+    claimed_count = len(event.get("claimed_by", []))
+    embed.description = (
+        f"{reward['icon']} الجائزة لكل شخص: `{event['amount']}` {reward['label']}\n"
+        f"🎟️ المقاعد المتبقية: `{event['remaining']}`\n"
+        f"✅ عدد المستلمين: `{claimed_count}`\n"
+        f"⏳ الوقت المتبقي: `{format_wait(remaining_time)}`\n"
+        f"👤 المنشئ: `{event['creator_name']}`"
+    )
+    return embed
+
+
+def build_event_payload(reward_type: str, amount: int, limit: int, creator_name: str) -> dict[str, Any]:
+    return {
+        "reward_type": reward_type,
+        "amount": amount,
+        "remaining": limit,
+        "claimed_by": [],
+        "creator_name": creator_name,
+        "channel_id": EVENT_PUBLIC_CHANNEL_ID,
+        "message_id": 0,
+        "expires_at": time.time() + EVENT_DURATION_SECONDS,
+    }
+
+
 def schedule_event_cleanup() -> None:
     global event_cleanup_task
     event = get_active_event()
@@ -900,7 +842,6 @@ def schedule_event_cleanup() -> None:
 
 async def post_event(event: dict[str, Any]) -> None:
     public_channel = bot.get_channel(EVENT_PUBLIC_CHANNEL_ID)
-    schedule_channel = bot.get_channel(EVENT_SCHEDULE_CHANNEL_ID)
     if not isinstance(public_channel, discord.TextChannel):
         return
     message = await delayed_send(public_channel, embed=event_post_embed(event), view=ClaimEventView())
@@ -908,32 +849,11 @@ async def post_event(event: dict[str, Any]) -> None:
     event["channel_id"] = public_channel.id
     set_active_event(event)
     schedule_event_cleanup()
-    if isinstance(schedule_channel, discord.TextChannel):
-        try:
-            await delayed_send(
-                schedule_channel,
-                embed=info_embed("بدأ حدث جديد", f"تم تشغيل حدث في روم الأحداث العامة.\nالجائزة: `{event['amount']}` {EVENT_REWARD_TYPES[event['reward_type']]['label']}", COLOR_SUCCESS),
-            )
-        except discord.HTTPException:
-            logger.exception("Failed to send event schedule announcement.")
-
-
-def build_event_payload(reward_type: str, amount: int, limit: int, creator_name: str) -> dict[str, Any]:
-    return {
-        "reward_type": reward_type,
-        "amount": amount,
-        "remaining": limit,
-        "claimed_by": [],
-        "creator_name": creator_name,
-        "channel_id": EVENT_PUBLIC_CHANNEL_ID,
-        "message_id": 0,
-        "expires_at": time.time() + EVENT_DURATION_SECONDS,
-    }
 
 
 async def maybe_start_random_event() -> None:
     systems = data_store["systems"]
-    if not systems.get("random_events_enabled", True):
+    if systems.get("bot_paused", False) or not systems.get("random_events_enabled", True):
         return
     now = time.time()
     if now < systems["next_random_event_at"]:
@@ -943,22 +863,16 @@ async def maybe_start_random_event() -> None:
     if get_active_event():
         return
     roll = random.random() * 100
-    if roll <= 1.0:
-        reward_type = "aramco_stock"
-        amount = 1
-        limit = 1
-    elif roll <= 2.0:
-        reward_type = "almarai_stock"
-        amount = 1
-        limit = 1
-    elif roll <= 2.5:
-        reward_type = "naseej_stock"
-        amount = 1
-        limit = 1
-    elif roll <= 2.8:
-        reward_type = "sabic_stock"
-        amount = 1
-        limit = 1
+    if roll <= 0.02:
+        reward_type, amount, limit = "bls_stock", 1, 1
+    elif roll <= 0.12:
+        reward_type, amount, limit = "aramco_stock", 1, 1
+    elif roll <= 0.22:
+        reward_type, amount, limit = "sabic_stock", 1, 1
+    elif roll <= 0.32:
+        reward_type, amount, limit = "naseej_stock", 1, 1
+    elif roll <= 0.42:
+        reward_type, amount, limit = "almarai_stock", 1, 1
     else:
         reward_type = random.choice(["money", "gold", "diamonds", "lands", "stocks"])
         amount = {
@@ -972,68 +886,19 @@ async def maybe_start_random_event() -> None:
     await post_event(build_event_payload(reward_type, amount, limit, "BLS Random Event"))
 
 
-def parse_schedule_time(raw: str) -> tuple[int, int]:
-    parts = raw.strip().split(":")
-    if len(parts) != 2 or not parts[0].isdigit() or not parts[1].isdigit():
-        raise ValueError("الوقت لازم يكون بصيغة HH:MM")
-    hour = int(parts[0])
-    minute = int(parts[1])
-    if not (0 <= hour <= 23 and 0 <= minute <= 59):
-        raise ValueError("وقت غير صالح.")
-    return hour, minute
-
-
-async def maybe_start_scheduled_events() -> None:
-    if not data_store["systems"].get("scheduled_events_enabled", True):
-        return
-    if get_active_event():
-        return
-    now = datetime.now(TIMEZONE)
-    weekday_map = {4: "friday", 5: "saturday"}
-    schedule_key = weekday_map.get(now.weekday())
-    if not schedule_key:
-        return
-    config = data_store["event_schedule"][schedule_key]
-    if not config.get("enabled", True):
-        return
-    hour, minute = parse_schedule_time(config["time"])
-    if now.hour != hour or now.minute != minute:
-        return
-    today_key = now.strftime("%Y-%m-%d")
-    if config.get("last_run_date") == today_key:
-        return
-    config["last_run_date"] = today_key
-    mark_dirty()
-    await post_event(build_event_payload(config["reward_type"], int(config["amount"]), int(config["limit"]), "الحدث المجدول"))
-    await refresh_event_schedule_message()
-
-
-async def maybe_post_daily_schedule_table() -> None:
-    now = datetime.now(TIMEZONE)
-    if now.hour != 5 or now.minute != 0:
-        return
-    today_key = now.strftime("%Y-%m-%d")
-    systems = data_store["systems"]
-    if systems.get("last_schedule_post_date") == today_key:
-        return
-    systems["last_schedule_post_date"] = today_key
-    mark_dirty()
-    await refresh_event_schedule_message()
-
-
 async def update_panel_message(channel: discord.TextChannel) -> None:
     panel_id = data_store.get("panel_message_id")
     view = AdminPanelView()
     if panel_id:
         try:
             message = await channel.fetch_message(panel_id)
-            await message.edit(embed=clean_admin_panel_embed(), view=view)
+            await message.edit(embed=admin_panel_embed(), view=view)
             return
         except discord.NotFound:
             logger.info("Admin panel message not found, creating a new one.")
         except discord.HTTPException:
             logger.exception("Failed to update admin panel message.")
-    message = await delayed_send(channel, embed=clean_admin_panel_embed(), view=view)
+    message = await delayed_send(channel, embed=admin_panel_embed(), view=view)
     data_store["panel_message_id"] = message.id
     mark_dirty()
 
@@ -1055,25 +920,6 @@ async def update_price_panel_message(channel: discord.TextChannel) -> None:
     mark_dirty()
 
 
-async def refresh_event_schedule_message() -> None:
-    channel = bot.get_channel(EVENT_SCHEDULE_CHANNEL_ID)
-    if not isinstance(channel, discord.TextChannel):
-        return
-    message_id = data_store.get("event_schedule_message_id")
-    if message_id:
-        try:
-            message = await channel.fetch_message(message_id)
-            await message.edit(embed=clean_event_schedule_embed(), view=None)
-            return
-        except discord.NotFound:
-            pass
-        except discord.HTTPException:
-            logger.exception("Failed to update event schedule message.")
-    message = await delayed_send(channel, embed=clean_event_schedule_embed(), view=None)
-    data_store["event_schedule_message_id"] = message.id
-    mark_dirty()
-
-
 async def refresh_admin_room_panels() -> None:
     channel = bot.get_channel(ADMIN_PANEL_CHANNEL_ID)
     if not isinstance(channel, discord.TextChannel):
@@ -1081,9 +927,12 @@ async def refresh_admin_room_panels() -> None:
     try:
         await update_panel_message(channel)
         await update_price_panel_message(channel)
-        await refresh_event_schedule_message()
     except discord.HTTPException:
         logger.exception("Failed to refresh admin room panels.")
+
+
+def get_item_meta(item_key: str) -> dict[str, Any]:
+    return ITEM_DEFINITIONS[item_key]
 
 
 def get_auction(auction_id: str) -> dict[str, Any] | None:
@@ -1117,22 +966,32 @@ def auction_embed(auction: dict[str, Any]) -> discord.Embed:
     color = COLOR_SECRET if auction["kind"] == "hidden" else asset_meta["color"]
     embed = base_embed(color)
     embed.title = auction_title(auction)
-    remaining = max(0, int(auction["expires_at"] - time.time())) if auction["state"] == "running" else max(0, int(math.ceil(auction["countdown_end_at"] - time.time())))
+    remaining = max(0, int(auction["expires_at"] - time.time()))
+    if auction["state"] == "countdown":
+        remaining = max(0, int(math.ceil(auction["countdown_end_at"] - time.time())))
     timer_line = f"⏳ {'العد النهائي' if auction['state'] == 'countdown' else 'الوقت المتبقي'}: `{remaining}`"
     if auction["current_bid"] > 0:
         top_bid_line = f"💰 أعلى مزايدة: `{auction['current_bid']}`"
         top_user_line = f"👑 أعلى مزايد: <@{auction['current_winner_id']}>"
+        last_bidder = auction.get("last_bidder_name") or "غير معروف"
+        last_bid_line = f"📢 آخر مزايد: `{last_bidder}` دفع `{auction['current_bid']}`"
     else:
         top_bid_line = f"💰 السعر المطروح: `{auction['starting_bid']}`"
         top_user_line = "👑 أعلى مزايد: لا يوجد حتى الآن"
+        last_bid_line = "📢 آخر مزايد: لا يوجد"
     if auction["kind"] == "hidden":
         item_line = "🎁 الجائزة: شيء مخفي وحصري"
         quantity_line = "❔ التفاصيل: مجهولة"
     else:
         item_line = f"{asset_meta['icon']} العنصر: `{asset_meta['label']}`"
         quantity_line = f"📦 الكمية: `{auction['quantity']}`"
+
+    history = auction.get("bid_history", [])[:5]
+    history_lines = [f"`{idx}` {bid['user_name']} - `{bid['amount']}`" for idx, bid in enumerate(history, 1)]
+    history_text = "\n".join(history_lines) if history_lines else "لا توجد مزايدات"
     embed.description = (
-        f"{item_line}\n{quantity_line}\n{top_bid_line}\n{top_user_line}\n{timer_line}"
+        f"{item_line}\n{quantity_line}\n{top_bid_line}\n{top_user_line}\n{last_bid_line}\n{timer_line}\n\n"
+        f"آخر/أعلى المزايدات:\n{history_text}"
     )
     return embed
 
@@ -1197,6 +1056,7 @@ def create_auction_payload(*, kind: str, item_key: str, quantity: int, starting_
         "starting_bid": starting_bid,
         "current_bid": 0,
         "current_winner_id": None,
+        "last_bidder_name": "",
         "channel_id": AUCTION_CHANNEL_ID,
         "message_id": 0,
         "expires_at": time.time() + AUCTION_DURATION_SECONDS,
@@ -1222,7 +1082,7 @@ async def post_auction(auction: dict[str, Any]) -> None:
 
 
 async def create_auto_auction() -> None:
-    item_key = random.choice(["gold", "diamonds", "lands", "stocks", "almarai_stock", "sabic_stock"])
+    item_key = random.choice(["gold", "diamonds", "lands", "stocks", "almarai_stock", "sabic_stock", "naseej_stock"])
     quantity = 1 if item_key in FIXED_STOCK_ITEMS else ITEM_DEFINITIONS[item_key]["auction_quantity"]
     starting_bid = max(500, int(get_current_buy_price(item_key) * quantity * 0.65))
     auction = create_auction_payload(kind="auto", item_key=item_key, quantity=quantity, starting_bid=starting_bid, title="مزاد تلقائي", creator_name="BLS Economy")
@@ -1239,23 +1099,26 @@ async def create_hidden_auction() -> None:
     mark_dirty()
 
 
-def hidden_auction_reward() -> tuple[str, str]:
-    if random.random() < 0.01:
-        return "aramco_stock", "🛢️ ربحت سهم أرامكو واحد"
+def hidden_auction_reward() -> tuple[str, int, str]:
+    roll = random.random() * 100
+    if roll < 0.03:
+        return "bls_stock", 1, "👑 ربحت سهم BLS واحد"
+    if roll < 0.13:
+        return "aramco_stock", 1, "🛢️ ربحت سهم أرامكو واحد"
     reward_key = random.choice(["money", "gold", "diamonds", "stocks", "lands"])
     if reward_key == "money":
         amount = random.randint(5000, 18000)
-        return reward_key, f"💵 ربحت `{amount}` فلوس"
+        return reward_key, amount, f"💵 ربحت `{amount}` فلوس"
     if reward_key == "gold":
         amount = random.randint(2, 6)
-        return reward_key, f"🥇 ربحت `{amount}` ذهب"
+        return reward_key, amount, f"🥇 ربحت `{amount}` ذهب"
     if reward_key == "diamonds":
         amount = random.randint(1, 3)
-        return reward_key, f"💎 ربحت `{amount}` ألماس"
+        return reward_key, amount, f"💎 ربحت `{amount}` ألماس"
     if reward_key == "stocks":
         amount = random.randint(6, 15)
-        return reward_key, f"📈 ربحت `{amount}` أسهم"
-    return reward_key, "🏝️ ربحت أرض نادرة واحدة"
+        return reward_key, amount, f"📈 ربحت `{amount}` أسهم"
+    return reward_key, 1, "🏝️ ربحت أرض نادرة واحدة"
 
 
 async def close_auction_message(auction: dict[str, Any], embed: discord.Embed) -> None:
@@ -1288,24 +1151,11 @@ async def finish_auction_with_winner(auction: dict[str, Any]) -> None:
     result_embed.title = "انتهى المزاد"
     result_embed.description = f"🏆 الفائز: <@{best_bid['user_id']}>\n💰 السعر النهائي: `{best_bid['amount']}`"
     if auction["kind"] == "hidden":
-        reward_type, reward_text = hidden_auction_reward()
+        reward_type, amount, reward_text = hidden_auction_reward()
         if reward_type == "money":
-            amount = int(reward_text.split("`")[1])
             credit_money(winner, amount)
-        elif reward_type == "gold":
-            winner["gold"] += int(reward_text.split("`")[1])
-            save_user(winner)
-        elif reward_type == "diamonds":
-            winner["diamonds"] += int(reward_text.split("`")[1])
-            save_user(winner)
-        elif reward_type == "stocks":
-            winner["stocks"] += int(reward_text.split("`")[1])
-            save_user(winner)
-        elif reward_type == "lands":
-            winner["lands"] += 1
-            save_user(winner)
-        elif reward_type == "aramco_stock":
-            winner["aramco_stock"] += 1
+        else:
+            winner[reward_type] += amount
             save_user(winner)
         result_embed.description += f"\n🎁 نتيجة المزاد المخفي: {reward_text}"
     else:
@@ -1337,6 +1187,8 @@ async def run_auction_countdown_step(auction: dict[str, Any]) -> None:
 
 async def tick_auction_system() -> None:
     systems = data_store["systems"]
+    if systems.get("bot_paused", False):
+        return
     now = time.time()
     if systems["auto_auction_enabled"] and now >= systems["next_auto_auction_at"]:
         await create_auto_auction()
@@ -1373,6 +1225,7 @@ def find_listing_by_message(message_id: int) -> dict[str, Any] | None:
 
 def market_embed(listing: dict[str, Any]) -> discord.Embed:
     item = get_item_meta(listing["item_key"])
+    bonus_line = "\n🎁 شراء الأسهم من السوق يعطي بونس عشوائي للمشتري." if listing["item_key"] in FIXED_STOCK_ITEMS + ("stocks",) else ""
     embed = base_embed(item["color"])
     embed.title = "عرض جديد في سوق اللاعبين"
     embed.description = (
@@ -1380,7 +1233,7 @@ def market_embed(listing: dict[str, Any]) -> discord.Embed:
         f"📦 الكمية المتبقية: `{listing['quantity']}`\n"
         f"💰 السعر للوحدة: `{listing['unit_price']}`\n"
         f"💳 السعر الكلي المتبقي: `{listing['quantity'] * listing['unit_price']}`\n"
-        f"👤 البائع: <@{listing['seller_id']}>"
+        f"👤 البائع: <@{listing['seller_id']}>{bonus_line}"
     )
     return embed
 
@@ -1427,27 +1280,23 @@ async def update_market_listing_message(listing: dict[str, Any]) -> None:
         logger.exception("Failed to update market listing.")
 
 
-async def close_market_listing_message(listing: dict[str, Any], embed: discord.Embed) -> None:
+async def delete_market_listing_message(listing: dict[str, Any]) -> None:
     channel = bot.get_channel(listing["channel_id"])
     if not isinstance(channel, discord.TextChannel):
         return
     try:
         message = await channel.fetch_message(listing["message_id"])
-        await message.edit(embed=embed, view=None)
+        await message.delete()
     except discord.NotFound:
         pass
     except discord.HTTPException:
-        logger.exception("Failed to close market listing.")
+        logger.exception("Failed to delete market listing.")
 
 
 async def notify_seller_sale(listing: dict[str, Any], buyer: discord.abc.User, quantity: int, total_price: int) -> None:
     member = bot.get_user(listing["seller_id"])
     item = get_item_meta(listing["item_key"])
-    message_text = (
-        f"تم شراء `{quantity}` من `{item['label']}` من عرضك.\n"
-        f"المشتري: `{buyer}`\n"
-        f"المبلغ المحول: `{total_price}`"
-    )
+    message_text = f"تم شراء `{quantity}` من `{item['label']}` من عرضك.\nالمشتري: `{buyer}`\nالمبلغ المحول: `{total_price}`"
     if member:
         try:
             await member.send(embed=info_embed("تم بيع عنصر من متجرك", message_text, COLOR_SUCCESS))
@@ -1459,10 +1308,16 @@ async def notify_seller_sale(listing: dict[str, Any], buyer: discord.abc.User, q
         await delayed_send(channel, content=f"<@{listing['seller_id']}>", embed=info_embed("إشعار بيع", message_text, COLOR_SUCCESS), delete_after=20)
 
 
+async def send_market_bonus_dm(buyer: discord.abc.User, item_key: str, bonus: int) -> None:
+    try:
+        item = ITEM_DEFINITIONS[item_key]
+        await buyer.send(embed=info_embed("بونس شراء من السوق", f"أخذت بونس `{bonus}` بعد شراء `{item['label']}` من سوق اللاعبين.", COLOR_GOLD))
+    except discord.HTTPException:
+        pass
+
+
 def calculate_company_sale_total(user: dict[str, Any], quantity: int, include_stocks: bool) -> tuple[int, int]:
-    base_total = 0
-    for _ in range(quantity):
-        base_total += random.randint(185000, 235000)
+    base_total = COMPANY_PRICE * quantity
     bundled_stocks = 0
     if include_stocks and user["stocks"] > 0:
         bundled_stocks = user["stocks"]
@@ -1508,11 +1363,15 @@ def resolve_steal_amount(victim_money: int) -> int:
 
 def roulette_reward() -> tuple[str, int]:
     roll = random.random() * 100
-    if roll < 0.3:
+    if roll < 0.02:
+        return "bls_stock", 1
+    if roll < 0.12:
+        return "aramco_stock", 1
+    if roll < 0.22:
         return "sabic_stock", 1
-    if roll < 0.8:
+    if roll < 0.32:
         return "naseej_stock", 1
-    if roll < 1.8:
+    if roll < 0.42:
         return "almarai_stock", 1
     reward_type = random.choice(["money", "gold", "diamonds", "lands", "stocks"])
     amount = {
@@ -1531,23 +1390,23 @@ def build_commands_embed() -> discord.Embed:
     embed.description = (
         "`ممتلكاتي` أو `رصيدي`\n"
         "`اوامر`\n"
-        "`شراء`\n"
-        "`اسعار`\n"
-        "`راتب`\n"
+        "`شراء` أو `اسعار`\n"
+        "`وظيفة` أو `وظيفة <عسكري/دكتور/طيار>`\n"
+        "`راتب` بعد اختيار وظيفة\n"
         "`حماية`\n"
         "`استثمار <مبلغ/كل>`\n"
+        "`استثمار عالمي <مبلغ>`\n"
         "`تداول <مبلغ/كل>`\n"
         "`روليت`\n"
         "`تحويل @شخص <مبلغ>`\n"
         "`سرقة @شخص`\n"
         "`توب`\n"
         "`شراء <العنصر> <الكمية>`\n"
-        "`بيع <العنصر> <الكمية/كل>`\n"
+        "`بيع <العنصر> <الكمية/كل>` مثل `بيع المراعي 1`\n"
         "`شراء شركة <عدد>`\n"
         "`بيع شركة <عدد>`\n"
         "`بيع شركة <عدد> مع_الاسهم`\n"
-        "`قرض` أو `قرض <مبلغ>`\n"
-        "`سداد` أو `سداد <مبلغ>`\n"
+        "`قرض <مبلغ>` و `سداد <مبلغ>`\n"
         "`متجر` لفتح سوق اللاعبين\n"
         "أوامر الإدارة: `لوحة الادارة`"
     )
@@ -1560,6 +1419,9 @@ class ClaimEventView(discord.ui.View):
 
     @discord.ui.button(label="استلام الحدث", style=discord.ButtonStyle.success, custom_id="claim_event")
     async def claim_event(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        if data_store["systems"].get("bot_paused", False):
+            await delayed_interaction_send(interaction, content="البوت موقوف مؤقتًا من الإدارة.")
+            return
         event = get_active_event()
         if not event:
             await delayed_interaction_send(interaction, content="لا يوجد حدث نشط الآن.")
@@ -1582,20 +1444,14 @@ class ClaimEventView(discord.ui.View):
         event["remaining"] -= 1
         reward = EVENT_REWARD_TYPES[event["reward_type"]]
         if event["remaining"] <= 0:
-            await delayed_interaction_send(
-                interaction,
-                embed=card_embed("تم الاستلام", f"{event['amount']} {reward['label']}", reward["color"], reward["icon"]),
-            )
+            await delayed_interaction_send(interaction, embed=card_embed("تم الاستلام", f"{event['amount']} {reward['label']}", reward["color"], reward["icon"]))
             await clear_active_event("تم استلام جميع الجوائز وانتهى الحدث.")
             return
         set_active_event(event)
         await interaction.response.defer()
         await asyncio.sleep(BOT_REPLY_DELAY_SECONDS)
         await interaction.message.edit(embed=event_post_embed(event), view=ClaimEventView())
-        await interaction.followup.send(
-            embed=card_embed("تم الاستلام", f"{event['amount']} {reward['label']}", reward["color"], reward["icon"]),
-            ephemeral=True,
-        )
+        await interaction.followup.send(embed=card_embed("تم الاستلام", f"{event['amount']} {reward['label']}", reward["color"], reward["icon"]), ephemeral=True)
 
 
 class EventCreateModal(discord.ui.Modal):
@@ -1621,17 +1477,14 @@ class EventCreateModal(discord.ui.Modal):
             await clear_active_event("تم استبدال الحدث بحدث جديد.")
         await post_event(build_event_payload(self.reward_type, amount, limit, str(interaction.user)))
         reward = EVENT_REWARD_TYPES[self.reward_type]
-        await delayed_interaction_send(
-            interaction,
-            embed=card_embed("تم إنشاء الحدث", f"{amount} {reward['label']} لعدد {limit} أشخاص", reward["color"], reward["icon"]),
-        )
+        await delayed_interaction_send(interaction, embed=card_embed("تم إنشاء الحدث", f"{amount} {reward['label']} لعدد {limit} أشخاص", reward["color"], reward["icon"]))
 
 
 class SpecialAuctionModal(discord.ui.Modal):
     def __init__(self) -> None:
         super().__init__(title="مزاد خاص وحصري")
         self.auction_name = discord.ui.TextInput(label="اسم المزاد", placeholder="مثال: مزاد خاص وحصري", max_length=50)
-        self.item_name = discord.ui.TextInput(label="العنصر", placeholder="ذهب أو ألماس أو أرض أو أسهم", max_length=30)
+        self.item_name = discord.ui.TextInput(label="العنصر", placeholder="ذهب أو سهم BLS أو المراعي", max_length=30)
         self.start_price = discord.ui.TextInput(label="السعر الابتدائي", placeholder="مثال: 5000", max_length=12)
         self.quantity = discord.ui.TextInput(label="الكمية", placeholder="مثال: 1", default="1", max_length=6)
         self.add_item(self.auction_name)
@@ -1671,56 +1524,7 @@ class PriceAdjustModal(discord.ui.Modal):
         new_buy, new_sell = adjust_price_by_amount(self.item_key, signed)
         await refresh_admin_room_panels()
         item = ITEM_DEFINITIONS[self.item_key]
-        await delayed_interaction_send(
-            interaction,
-            embed=info_embed(
-                "تم تحديث السعر",
-                f"السعر الجديد لـ {item['label']}:\nشراء `{new_buy}`\nبيع `{new_sell}`",
-                COLOR_SUCCESS,
-            ),
-        )
-
-
-class EventScheduleModal(discord.ui.Modal):
-    def __init__(self) -> None:
-        super().__init__(title="إعداد الأحداث المجدولة")
-        friday = data_store["event_schedule"]["friday"]
-        saturday = data_store["event_schedule"]["saturday"]
-        self.friday_time = discord.ui.TextInput(label="وقت الجمعة HH:MM", default=str(friday["time"]), max_length=5)
-        self.friday_reward = discord.ui.TextInput(label="جائزة الجمعة", default=str(friday["reward_type"]), max_length=20)
-        self.friday_amount = discord.ui.TextInput(label="كمية الجمعة", default=str(friday["amount"]), max_length=10)
-        self.saturday_time = discord.ui.TextInput(label="وقت السبت HH:MM", default=str(saturday["time"]), max_length=5)
-        self.saturday_reward = discord.ui.TextInput(label="جائزة السبت", default=str(saturday["reward_type"]), max_length=20)
-        self.saturday_amount = discord.ui.TextInput(label="كمية السبت", default=str(saturday["amount"]), max_length=10)
-        self.add_item(self.friday_time)
-        self.add_item(self.friday_reward)
-        self.add_item(self.friday_amount)
-        self.add_item(self.saturday_time)
-        self.add_item(self.saturday_reward)
-        self.add_item(self.saturday_amount)
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        try:
-            parse_schedule_time(str(self.friday_time))
-            parse_schedule_time(str(self.saturday_time))
-            friday_reward = str(self.friday_reward).strip()
-            saturday_reward = str(self.saturday_reward).strip()
-            if friday_reward not in EVENT_REWARD_TYPES or saturday_reward not in EVENT_REWARD_TYPES:
-                raise ValueError("نوع الجائزة غير مدعوم في الجدول.")
-            friday_amount = parse_amount(str(self.friday_amount))
-            saturday_amount = parse_amount(str(self.saturday_amount))
-        except ValueError as exc:
-            await delayed_interaction_send(interaction, content=str(exc))
-            return
-        data_store["event_schedule"]["friday"]["time"] = str(self.friday_time)
-        data_store["event_schedule"]["friday"]["reward_type"] = friday_reward
-        data_store["event_schedule"]["friday"]["amount"] = friday_amount
-        data_store["event_schedule"]["saturday"]["time"] = str(self.saturday_time)
-        data_store["event_schedule"]["saturday"]["reward_type"] = saturday_reward
-        data_store["event_schedule"]["saturday"]["amount"] = saturday_amount
-        mark_dirty()
-        await refresh_event_schedule_message()
-        await delayed_interaction_send(interaction, content="تم تحديث جدول الأحداث بنجاح.")
+        await delayed_interaction_send(interaction, embed=info_embed("تم تحديث السعر", f"السعر الجديد لـ {item['label']}:\nشراء `{new_buy}`\nبيع `{new_sell}`", COLOR_SUCCESS))
 
 
 class MarketCreateModal(discord.ui.Modal):
@@ -1735,6 +1539,9 @@ class MarketCreateModal(discord.ui.Modal):
         self.add_item(self.unit_price)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
+        if data_store["systems"].get("bot_paused", False):
+            await delayed_interaction_send(interaction, content="البوت موقوف مؤقتًا من الإدارة.")
+            return
         if interaction.user.id != self.owner_id:
             await delayed_interaction_send(interaction, content="هذه النافذة خاصة بصاحب الأمر فقط.")
             return
@@ -1756,10 +1563,8 @@ class MarketCreateModal(discord.ui.Modal):
         save_user(user)
         listing = create_market_listing_payload(item_key, quantity, unit_price, interaction.user.id, str(interaction.user))
         await post_market_listing(listing)
-        await delayed_interaction_send(
-            interaction,
-            embed=info_embed("تم نشر العرض", f"تم نشر `{quantity}` من `{ITEM_DEFINITIONS[item_key]['label']}` بسعر `{unit_price}` للوحدة.", COLOR_SUCCESS),
-        )
+        bonus_text = "\nملاحظة: شراء الأسهم من السوق يعطي المشتري بونس عشوائي." if item_key in FIXED_STOCK_ITEMS + ("stocks",) else ""
+        await delayed_interaction_send(interaction, embed=info_embed("تم نشر العرض", f"تم نشر `{quantity}` من `{ITEM_DEFINITIONS[item_key]['label']}` بسعر `{unit_price}` للوحدة.{bonus_text}", COLOR_SUCCESS))
 
 
 class MarketBuyModal(discord.ui.Modal):
@@ -1770,6 +1575,9 @@ class MarketBuyModal(discord.ui.Modal):
         self.add_item(self.quantity)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
+        if data_store["systems"].get("bot_paused", False):
+            await delayed_interaction_send(interaction, content="البوت موقوف مؤقتًا من الإدارة.")
+            return
         listing = get_market_listing(self.listing_id)
         if not listing:
             await delayed_interaction_send(interaction, content="هذا العرض غير متاح الآن.")
@@ -1794,20 +1602,28 @@ class MarketBuyModal(discord.ui.Modal):
         buyer["money"] -= total_price
         seller_credit, _ = credit_money(seller, total_price)
         buyer[listing["item_key"]] += quantity
+        bonus = 0
+        if listing["item_key"] in FIXED_STOCK_ITEMS + ("stocks",):
+            bonus = random.randint(MARKET_STOCK_BONUS_MIN, MARKET_STOCK_BONUS_MAX)
+            buyer["money"] += bonus
         listing["quantity"] -= quantity
         save_user(buyer)
         save_user(seller)
         if listing["quantity"] <= 0:
             listing["closed"] = True
-            await close_market_listing_message(listing, info_embed("تم بيع العرض", f"تم بيع كامل العرض وتحويل `{seller_credit}` للبائع.", COLOR_SUCCESS))
+            mark_dirty()
+            await delete_market_listing_message(listing)
+            channel = bot.get_channel(MARKET_CHANNEL_ID)
+            if isinstance(channel, discord.TextChannel):
+                await delayed_send(channel, embed=info_embed("تم بيع العرض", f"تم بيع كامل العرض وتحويل `{seller_credit}` للبائع.", COLOR_SUCCESS), delete_after=20)
         else:
             await update_market_listing_message(listing)
         mark_dirty()
         await notify_seller_sale(listing, interaction.user, quantity, total_price)
-        await delayed_interaction_send(
-            interaction,
-            embed=info_embed("تم الشراء", f"اشتريت `{quantity}` من `{ITEM_DEFINITIONS[listing['item_key']]['label']}` بقيمة `{total_price}`.", COLOR_SUCCESS),
-        )
+        if bonus:
+            await send_market_bonus_dm(interaction.user, listing["item_key"], bonus)
+        bonus_line = f"\n🎁 بونس الشراء: `{bonus}`" if bonus else ""
+        await delayed_interaction_send(interaction, embed=info_embed("تم الشراء", f"اشتريت `{quantity}` من `{ITEM_DEFINITIONS[listing['item_key']]['label']}` بقيمة `{total_price}`.{bonus_line}", COLOR_SUCCESS))
 
 
 class MarketItemView(discord.ui.View):
@@ -1843,8 +1659,8 @@ class MarketItemView(discord.ui.View):
         save_user(seller)
         listing["closed"] = True
         mark_dirty()
-        await close_market_listing_message(listing, info_embed("تم إلغاء العرض", f"تم إرجاع `{listing['quantity']}` إلى البائع.", COLOR_WARNING))
-        await delayed_interaction_send(interaction, content="تم إلغاء العرض بنجاح.")
+        await delete_market_listing_message(listing)
+        await delayed_interaction_send(interaction, content="تم إلغاء العرض وحذف الرسالة بالكامل.")
 
 
 class MarketLauncherView(discord.ui.View):
@@ -1886,11 +1702,7 @@ class ProtectedStealAttemptView(discord.ui.View):
             thief["lastSteal"] = time.time()
             save_user(victim)
             save_user(thief)
-            await delayed_interaction_edit(
-                interaction,
-                embed=info_embed("فشلت المحاولة", f"اختيارك كان خطأ.\nتم تحويل `{STEAL_PROTECTED_COST}` للهدف.", COLOR_DANGER),
-                view=self,
-            )
+            await delayed_interaction_edit(interaction, embed=info_embed("فشلت المحاولة", f"اختيارك كان خطأ.\nتم تحويل `{STEAL_PROTECTED_COST}` للهدف.", COLOR_DANGER), view=self)
             return
         stolen = resolve_steal_amount(max(1, victim["money"]))
         victim["money"] -= stolen
@@ -1898,11 +1710,7 @@ class ProtectedStealAttemptView(discord.ui.View):
         thief["lastSteal"] = time.time()
         save_user(victim)
         save_user(thief)
-        await delayed_interaction_edit(
-            interaction,
-            embed=info_embed("نجحت السرقة", f"استرجعت `{STEAL_PROTECTED_COST}` وسرقت `{stolen}`.", COLOR_SUCCESS),
-            view=self,
-        )
+        await delayed_interaction_edit(interaction, embed=info_embed("نجحت السرقة", f"استرجعت `{STEAL_PROTECTED_COST}` وسرقت `{stolen}`.", COLOR_SUCCESS), view=self)
 
     @discord.ui.button(label="A", style=discord.ButtonStyle.primary)
     async def choice_a(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
@@ -1937,15 +1745,57 @@ class ProtectedStealConfirmView(discord.ui.View):
             return
         thief["money"] -= STEAL_PROTECTED_COST
         save_user(thief)
-        await delayed_interaction_edit(
-            interaction,
-            embed=info_embed("اختر الخيار الصحيح", "واحد فقط صحيح. إذا اخترته تنجح السرقة، وإذا أخطأت تفشل المحاولة.", COLOR_WARNING),
-            view=ProtectedStealAttemptView(self.thief_id, self.victim_id),
-        )
+        await delayed_interaction_edit(interaction, embed=info_embed("اختر الخيار الصحيح", "واحد فقط صحيح. إذا اخترته تنجح السرقة، وإذا أخطأت تفشل المحاولة.", COLOR_WARNING), view=ProtectedStealAttemptView(self.thief_id, self.victim_id))
 
     @discord.ui.button(label="لا", style=discord.ButtonStyle.secondary)
     async def no_button(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
         await delayed_interaction_edit(interaction, embed=info_embed("تم الإلغاء", "تم إلغاء محاولة السرقة المحمية.", COLOR_WARNING), view=None)
+
+
+class GlobalInvestView(discord.ui.View):
+    def __init__(self, owner_id: int, amount: int) -> None:
+        super().__init__(timeout=60)
+        self.owner_id = owner_id
+        self.amount = amount
+        self.win_choice = random.choice(["A", "B", "C"])
+        self.mid_choice = random.choice([choice for choice in ["A", "B", "C"] if choice != self.win_choice])
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("هذا الاستثمار مو لك.", ephemeral=True)
+            return False
+        return True
+
+    async def resolve(self, interaction: discord.Interaction, choice: str) -> None:
+        user = get_user(self.owner_id)
+        for child in self.children:
+            child.disabled = True
+        if choice == self.win_choice:
+            profit = 6000 if self.amount >= 1000 else self.amount * 6
+            credit_money(user, self.amount + profit)
+            embed = card_embed("ربح الاستثمار العالمي", f"رجع لك رأس المال `{self.amount}` + ربح `{profit}`", COLOR_SUCCESS, "🌍")
+        elif choice == self.mid_choice:
+            returned = max(1, self.amount // 2)
+            credit_money(user, returned)
+            embed = card_embed("نتيجة وسط", f"رجع لك `{returned}` وخسرت `{self.amount - returned}`", COLOR_WARNING, "🌍")
+        else:
+            embed = card_embed("خسارة الاستثمار العالمي", f"خسرت `{self.amount}`", COLOR_DANGER, "🌍")
+        user["lastGlobalInvest"] = time.time()
+        save_user(user)
+        await delayed_interaction_edit(interaction, embed=embed, view=self)
+        self.stop()
+
+    @discord.ui.button(label="A", style=discord.ButtonStyle.primary)
+    async def option_a(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        await self.resolve(interaction, "A")
+
+    @discord.ui.button(label="B", style=discord.ButtonStyle.primary)
+    async def option_b(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        await self.resolve(interaction, "B")
+
+    @discord.ui.button(label="C", style=discord.ButtonStyle.primary)
+    async def option_c(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        await self.resolve(interaction, "C")
 
 
 class ResetConfirmView(discord.ui.View):
@@ -1975,11 +1825,7 @@ class ResetConfirmView(discord.ui.View):
         await clear_active_event("تم تصفير الاقتصاد وإغلاق الحدث الحالي.")
         for child in self.children:
             child.disabled = True
-        await delayed_interaction_edit(
-            interaction,
-            embed=info_embed("تم التصفير", f"تم تصفير الاقتصاد لعدد `{len(users)}` مستخدم.", COLOR_DANGER),
-            view=self,
-        )
+        await delayed_interaction_edit(interaction, embed=info_embed("تم التصفير", f"تم تصفير الاقتصاد لعدد `{len(users)}` مستخدم.", COLOR_DANGER), view=self)
         self.stop()
 
     @discord.ui.button(label="لا", style=discord.ButtonStyle.secondary, custom_id="confirm_reset_no")
@@ -2047,6 +1893,9 @@ class AuctionBidModal(discord.ui.Modal):
         self.add_item(self.bid_amount)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
+        if data_store["systems"].get("bot_paused", False):
+            await delayed_interaction_send(interaction, content="البوت موقوف مؤقتًا من الإدارة.")
+            return
         auction = get_auction(self.auction_id)
         if not auction:
             await delayed_interaction_send(interaction, content="لا يوجد مزاد نشط الآن.")
@@ -2066,21 +1915,17 @@ class AuctionBidModal(discord.ui.Modal):
             return
         auction["current_bid"] = amount
         auction["current_winner_id"] = interaction.user.id
+        auction["last_bidder_name"] = str(interaction.user)
         upsert_bid_history(auction, interaction.user.id, amount, str(interaction.user))
         if auction["state"] == "countdown":
             auction["countdown_end_at"] = time.time() + AUCTION_COUNTDOWN_SECONDS
             auction["last_countdown_value"] = 0
         mark_dirty()
-        await delayed_interaction_send(interaction, content="تم تسجيل مزايدتك.")
+        await delayed_interaction_send(interaction, content=f"تم تسجيل مزايدتك: `{amount}`.")
         await repost_auction_message(auction)
         channel = bot.get_channel(auction["channel_id"])
         if isinstance(channel, discord.TextChannel):
-            await delayed_send(
-                channel,
-                content=f"📢 {interaction.user.mention}",
-                embed=info_embed("تمت مزايدة جديدة", f"تم رفع المزاد إلى `{amount}`.", COLOR_SUCCESS),
-                delete_after=AUCTION_BID_CONFIRM_DELETE_AFTER,
-            )
+            await delayed_send(channel, content=f"📢 {interaction.user.mention}", embed=info_embed("تمت مزايدة جديدة", f"`{interaction.user}` دفع `{amount}` وأصبح أعلى مزايد.", COLOR_SUCCESS), delete_after=AUCTION_BID_CONFIRM_DELETE_AFTER)
 
 
 class AuctionBidOnlyView(discord.ui.View):
@@ -2097,21 +1942,6 @@ class AuctionBidOnlyView(discord.ui.View):
             await interaction.response.send_message("لا يوجد مزاد نشط الآن.", ephemeral=True)
             return
         await interaction.response.send_modal(AuctionBidModal(auction["auction_id"]))
-
-
-class EventScheduleView(discord.ui.View):
-    def __init__(self) -> None:
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="تحديث الجدول", style=discord.ButtonStyle.primary, custom_id="schedule_update")
-    async def update_schedule(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
-        if interaction.channel_id != EVENT_SCHEDULE_CHANNEL_ID and interaction.channel_id != ADMIN_PANEL_CHANNEL_ID:
-            await interaction.response.send_message("هذا الزر مخصص للإدارة.", ephemeral=True)
-            return
-        if not isinstance(interaction.user, discord.Member) or not has_admin_access(interaction.user):
-            await interaction.response.send_message("هذا الزر مخصص للإدارة فقط.", ephemeral=True)
-            return
-        await interaction.response.send_modal(EventScheduleModal())
 
 
 class AdminPanelView(discord.ui.View):
@@ -2148,9 +1978,9 @@ class AdminPanelView(discord.ui.View):
     async def lands_event(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
         await self.open_event_modal(interaction, "lands")
 
-    @discord.ui.button(label="حدث أرامكو", style=discord.ButtonStyle.success, custom_id="panel_aramco", row=1)
-    async def aramco_event(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
-        await self.open_event_modal(interaction, "aramco_stock")
+    @discord.ui.button(label="حدث BLS", style=discord.ButtonStyle.success, custom_id="panel_bls", row=1)
+    async def bls_event(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        await self.open_event_modal(interaction, "bls_stock")
 
     @discord.ui.button(label="مزاد خاص", style=discord.ButtonStyle.primary, custom_id="panel_special_auction", row=1)
     async def special_auction(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
@@ -2182,37 +2012,7 @@ class AdminPanelView(discord.ui.View):
         await refresh_admin_room_panels()
         await delayed_interaction_send(interaction, content=f"المزاد المخفي الآن: `{'شغال' if systems['hidden_auction_enabled'] else 'متوقف'}`")
 
-    @discord.ui.button(label="جدولة الأحداث", style=discord.ButtonStyle.primary, custom_id="panel_schedule_events", row=2)
-    async def schedule_events(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
-        if not await self.ensure_admin(interaction):
-            return
-        await interaction.response.send_modal(EventScheduleModal())
-
-    @discord.ui.button(label="تصفير الاقتصاد", style=discord.ButtonStyle.danger, custom_id="panel_reset_economy", row=2)
-    async def reset_economy(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
-        if not await self.ensure_admin(interaction):
-            return
-        await interaction.response.send_message(
-            embed=info_embed("تأكيد التصفير", f"هل أنت متأكد؟ سيتم حذف الممتلكات وإرجاع كل لاعب إلى `{START_MONEY}`.", COLOR_DANGER),
-            view=ResetConfirmView(),
-            ephemeral=True,
-        )
-
-
-    @discord.ui.button(label="تشغيل/إيقاف المجدول", style=discord.ButtonStyle.success, custom_id="panel_toggle_scheduled", row=3)
-    async def toggle_scheduled_events(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
-        if not await self.ensure_admin(interaction):
-            return
-        systems = data_store["systems"]
-        systems["scheduled_events_enabled"] = not systems.get("scheduled_events_enabled", True)
-        mark_dirty()
-        await refresh_admin_room_panels()
-        await delayed_interaction_send(
-            interaction,
-            content=f"الأحداث المجدولة الآن: `{'شغال' if systems['scheduled_events_enabled'] else 'متوقف'}`",
-        )
-
-    @discord.ui.button(label="تشغيل/إيقاف العشوائي", style=discord.ButtonStyle.secondary, custom_id="panel_toggle_random", row=3)
+    @discord.ui.button(label="تشغيل/إيقاف العشوائي", style=discord.ButtonStyle.secondary, custom_id="panel_toggle_random", row=2)
     async def toggle_random_events(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
         if not await self.ensure_admin(interaction):
             return
@@ -2220,12 +2020,32 @@ class AdminPanelView(discord.ui.View):
         systems["random_events_enabled"] = not systems.get("random_events_enabled", True)
         mark_dirty()
         await refresh_admin_room_panels()
-        await delayed_interaction_send(
-            interaction,
-            content=f"الأحداث العشوائية الآن: `{'شغال' if systems['random_events_enabled'] else 'متوقف'}`",
-        )
+        await delayed_interaction_send(interaction, content=f"الأحداث العشوائية الآن: `{'شغال' if systems['random_events_enabled'] else 'متوقف'}`")
+
+    @discord.ui.button(label="إيقاف/تشغيل كل البوت", style=discord.ButtonStyle.danger, custom_id="panel_private_pause", row=3)
+    async def private_pause(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        if not await self.ensure_admin(interaction):
+            return
+        systems = data_store["systems"]
+        systems["bot_paused"] = not systems.get("bot_paused", False)
+        mark_dirty()
+        await refresh_admin_room_panels()
+        try:
+            await interaction.user.send(embed=info_embed("زر الإيقاف الخاص", f"حالة البوت الآن: `{'موقوف' if systems['bot_paused'] else 'شغال'}`", COLOR_DANGER if systems["bot_paused"] else COLOR_SUCCESS))
+        except discord.HTTPException:
+            pass
+        await delayed_interaction_send(interaction, content=f"حالة البوت الآن: `{'موقوف' if systems['bot_paused'] else 'شغال'}`")
+
+    @discord.ui.button(label="تصفير الاقتصاد", style=discord.ButtonStyle.danger, custom_id="panel_reset_economy", row=3)
+    async def reset_economy(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        if not await self.ensure_admin(interaction):
+            return
+        await interaction.response.send_message(embed=info_embed("تأكيد التصفير", f"هل أنت متأكد؟ سيتم حذف الممتلكات وإرجاع كل لاعب إلى `{START_MONEY}`.", COLOR_DANGER), view=ResetConfirmView(), ephemeral=True)
+
 
 async def maybe_auto_update_prices() -> None:
+    if data_store["systems"].get("bot_paused", False):
+        return
     changed = False
     now = time.time()
     for item_key in BUYABLE_DYNAMIC_ITEMS:
@@ -2251,15 +2071,36 @@ async def process_loans() -> None:
         mark_dirty()
 
 
+async def process_company_income() -> None:
+    if data_store["systems"].get("bot_paused", False):
+        return
+    now = time.time()
+    changed = False
+    for user in data_store["users"].values():
+        companies = int(user.get("companies", 0))
+        if companies <= 0:
+            user["lastCompanyIncome"] = now
+            continue
+        last = float(user.get("lastCompanyIncome", now))
+        periods = int((now - last) // COMPANY_INCOME_INTERVAL_SECONDS)
+        if periods <= 0:
+            continue
+        income = periods * companies * COMPANY_HOURLY_INCOME
+        user["money"] += income
+        user["lastCompanyIncome"] = last + periods * COMPANY_INCOME_INTERVAL_SECONDS
+        changed = True
+    if changed:
+        mark_dirty()
+
+
 async def background_loop() -> None:
     await bot.wait_until_ready()
     while not bot.is_closed():
         try:
             await maybe_auto_update_prices()
             await process_loans()
+            await process_company_income()
             await tick_auction_system()
-            await maybe_start_scheduled_events()
-            await maybe_post_daily_schedule_table()
             await maybe_start_random_event()
         except Exception:
             logger.exception("Background loop crashed.")
@@ -2276,7 +2117,6 @@ async def on_ready() -> None:
         bot.add_view(ClaimEventView())
         bot.add_view(AuctionBidOnlyView())
         bot.add_view(MarketItemView())
-        bot.add_view(EventScheduleView())
         views_registered = True
     await refresh_admin_room_panels()
     schedule_event_cleanup()
@@ -2284,6 +2124,36 @@ async def on_ready() -> None:
         background_task = asyncio.create_task(background_loop())
     if auto_save_task is None or auto_save_task.done():
         auto_save_task = bot.loop.create_task(auto_save_loop())
+
+
+def parse_job(raw: str) -> str:
+    value = raw.strip()
+    for job_name, meta in JOBS.items():
+        if value in meta["aliases"]:
+            return job_name
+    raise ValueError("الوظيفة غير معروفة. اختر: عسكري، دكتور، طيار.")
+
+
+async def handle_salary(message: discord.Message, user: dict[str, Any]) -> None:
+    if not user.get("job"):
+        await delayed_reply(message, embed=info_embed("اختار وظيفة", "اكتب `وظيفة عسكري` أو `وظيفة دكتور` أو `وظيفة طيار`.\nكل وظيفة راتبها كل 5 ساعات، وكل مرة تستلم راتب يزيد راتبك القادم 200.", COLOR_INFO))
+        return
+    left = cooldown_left(user["lastJobSalary"], JOB_COOLDOWN_SECONDS)
+    if left > 0:
+        await delayed_reply(message, embed=info_embed("انتظر شوي", f"تقدر تستلم راتبك بعد `{format_wait(left)}`.", COLOR_WARNING))
+        return
+    base_salary = JOBS[user["job"]]["salary"]
+    salary = base_salary + int(user.get("jobRaise", 0))
+    credited, absorbed = credit_money(user, salary)
+    user["lastJobSalary"] = time.time()
+    user["jobRaise"] = int(user.get("jobRaise", 0)) + JOB_RAISE_AMOUNT
+    save_user(user)
+    text = f"وظيفتك: `{user['job']}`\nراتبك: `{salary}`\nزيادة الراتب القادم: `{user['jobRaise']}`"
+    if absorbed > 0:
+        text += f"\nذهب `{absorbed}` لتقليل الرصيد السالب"
+    elif credited != salary:
+        text += f"\nالمضاف فعليًا `{credited}`"
+    await delayed_reply(message, embed=card_embed("راتب الوظيفة", text, COLOR_WARNING, "💼"))
 
 
 @bot.event
@@ -2303,11 +2173,19 @@ async def on_message(message: discord.Message) -> None:
             if message.channel.id != ADMIN_PANEL_CHANNEL_ID:
                 raise ValueError(f"استخدم هذا الأمر داخل روم الإدارة: {ADMIN_PANEL_CHANNEL_ID}")
             await refresh_admin_room_panels()
-            await delayed_reply(message, embed=info_embed("تم", "تم تحديث لوحات الإدارة والأسعار وجدول الأحداث.", COLOR_SUCCESS), delete_after=8)
+            await delayed_reply(message, embed=info_embed("تم", "تم تحديث لوحات الإدارة والأسعار.", COLOR_SUCCESS), delete_after=8)
             return
+
         allowed_channels = {EVENT_PUBLIC_CHANNEL_ID, ADMIN_PANEL_CHANNEL_ID, MARKET_CHANNEL_ID, EVENT_SCHEDULE_CHANNEL_ID, AUCTION_CHANNEL_ID}
         if message.channel.id not in allowed_channels:
             return
+
+        if data_store["systems"].get("bot_paused", False):
+            is_admin = isinstance(message.author, discord.Member) and has_admin_access(message.author)
+            if not is_admin or cmd not in {"لوحة", "اوامر", "أوامر"}:
+                await delayed_reply(message, embed=info_embed("البوت موقوف", "الإدارة أوقفت أوامر البوت مؤقتًا.", COLOR_DANGER), delete_after=8)
+                return
+
         if cmd in {"ممتلكاتي", "رصيدي", "فلوسي"}:
             await delayed_reply(message, embed=dashboard_embed(user, message.author))
             return
@@ -2321,23 +2199,25 @@ async def on_message(message: discord.Message) -> None:
             await delayed_reply(message, embed=shop_embed())
             return
         if cmd == "متجر":
-            await delayed_reply(
-                message,
-                embed=info_embed("سوق اللاعبين", "اضغط الزر لإضافة عنصر وبيعه داخل سوق اللاعبين بشكل احترافي.", COLOR_INFO),
-                view=MarketLauncherView(message.author.id),
-            )
+            await delayed_reply(message, embed=info_embed("سوق اللاعبين", "اضغط الزر لإضافة عنصر وبيعه داخل سوق اللاعبين. بيع الأسهم في السوق يعطي المشتري بونس عشوائي.", COLOR_INFO), view=MarketLauncherView(message.author.id))
+            return
+        if cmd == "وظيفة":
+            if len(args) == 1:
+                await delayed_reply(message, embed=info_embed("الوظائف", "اكتب `وظيفة عسكري` راتبه 2000\nأو `وظيفة دكتور` راتبه 2500\nأو `وظيفة طيار` راتبه 3000\n\nتستلم الراتب كل 5 ساعات، وكل مرة تستلم راتب يزيد راتبك القادم 200.", COLOR_INFO))
+                return
+            job = parse_job(args[1])
+            user["job"] = job
+            user["jobRaise"] = 0
+            user["lastJobSalary"] = 0
+            save_user(user)
+            await delayed_reply(message, embed=info_embed("تم اختيار الوظيفة", f"وظيفتك الآن `{job}`.\nراتبك الأساسي `{JOBS[job]['salary']}` كل 5 ساعات.\nكل مرة تستلم راتب يزيد راتبك القادم 200.", COLOR_SUCCESS))
+            return
+        if cmd == "راتب":
+            await handle_salary(message, user)
             return
         if cmd == "قرض":
             if len(args) == 1:
-                await delayed_reply(
-                    message,
-                    embed=info_embed("طلب قرض", f"الحد الأقصى للقرض هو `{LOAN_MAX_AMOUNT}`.", COLOR_INFO),
-                    view=MarketLauncherView(message.author.id) if False else None,
-                )
-                await delayed_reply(
-                    message,
-                    embed=info_embed("قرض", "اكتب `قرض <مبلغ>` أو استخدم الصيغة المباشرة.", COLOR_INFO),
-                )
+                await delayed_reply(message, embed=info_embed("قرض", f"اكتب `قرض <مبلغ>`.\nالحد الأقصى للقرض هو `{LOAN_MAX_AMOUNT}`.", COLOR_INFO))
                 return
             amount = parse_amount(args[1])
             if user.get("loan"):
@@ -2372,22 +2252,6 @@ async def on_message(message: discord.Message) -> None:
                 await delayed_reply(message, embed=info_embed("تم السداد الجزئي", f"سددت `{pay}` والمتبقي `{user['loan']['balance']}` وتم تجديد المهلة لساعة.", COLOR_SUCCESS))
                 return
             raise ValueError("لا يوجد عليك قرض قائم.")
-        if cmd == "راتب":
-            left = cooldown_left(user["lastDaily"], DAILY_COOLDOWN)
-            if left > 0:
-                await delayed_reply(message, embed=info_embed("انتظر شوي", f"تقدر تستلم راتبك بعد `{format_wait(left)}`.", COLOR_WARNING))
-                return
-            salary = random.randint(350, 900)
-            credited, absorbed = credit_money(user, salary)
-            user["lastDaily"] = time.time()
-            save_user(user)
-            text = f"{salary}"
-            if absorbed > 0:
-                text += f"\nذهب `{absorbed}` لتقليل الرصيد السالب"
-            elif credited != salary:
-                text += f"\nالمضاف فعليًا `{credited}`"
-            await delayed_reply(message, embed=card_embed("راتبك", text, COLOR_WARNING, "💰"))
-            return
         if cmd == "حماية":
             if user["money"] < PROTECTION_COST:
                 raise ValueError(f"تحتاج `{PROTECTION_COST}` لتفعيل الحماية.")
@@ -2396,6 +2260,25 @@ async def on_message(message: discord.Message) -> None:
             user["protectionUntil"] = start_from + PROTECTION_DURATION_SECONDS
             save_user(user)
             await delayed_reply(message, embed=info_embed("تم تفعيل الحماية", f"تم خصم `{PROTECTION_COST}` وتفعيل الحماية لمدة `ساعتين`.", COLOR_SUCCESS))
+            return
+        if cmd == "استثمار" and len(args) >= 2 and args[1] == "عالمي":
+            left = cooldown_left(user["lastGlobalInvest"], GLOBAL_INVEST_COOLDOWN)
+            if left > 0:
+                await delayed_reply(message, embed=info_embed("انتظر", f"باقي `{format_wait(left)}` على الاستثمار العالمي.", COLOR_WARNING))
+                return
+            if len(args) < 3:
+                raise ValueError("اكتب: استثمار عالمي <مبلغ>")
+            amount = parse_amount(args[2])
+            if amount > user["money"]:
+                raise ValueError("ما عندك المبلغ المطلوب.")
+            user["money"] -= amount
+            save_user(user)
+            embed = info_embed(
+                "استثمار عالمي",
+                "اختر A أو B أو C.\nواحد من الخيارات يعطيك ربح قوي، واحد وسط، وواحد خسارة. الكلام الظاهر ممكن يخدعك.",
+                COLOR_INFO,
+            )
+            await delayed_reply(message, embed=embed, view=GlobalInvestView(message.author.id, amount))
             return
         if cmd == "استثمار":
             left = cooldown_left(user["lastInvest"], INVEST_COOLDOWN)
@@ -2415,7 +2298,7 @@ async def on_message(message: discord.Message) -> None:
                 _, absorbed = credit_money(user, amount + gain)
                 text = f"رجع لك رأس المال `{amount}` + ربح `{gain}`"
                 if absorbed > 0:
-                    text += f"\nتم امتصاص `{absorbed}` للرصد السالب"
+                    text += f"\nتم امتصاص `{absorbed}` للرصيد السالب"
                 save_user(user)
                 await delayed_reply(message, embed=card_embed("ربح الاستثمار", text, COLOR_SUCCESS, "📈"))
             else:
@@ -2453,7 +2336,7 @@ async def on_message(message: discord.Message) -> None:
         if cmd == "روليت":
             left = cooldown_left(user["lastRoulette"], ROULETTE_COOLDOWN)
             if left > 0:
-                await delayed_reply(message, embed=info_embed("انتظر", f"الروليت كل 10 دقائق. باقي `{format_wait(left)}`.", COLOR_WARNING))
+                await delayed_reply(message, embed=info_embed("انتظر", f"الروليت كل 3 دقائق. باقي `{format_wait(left)}`.", COLOR_WARNING))
                 return
             user["lastRoulette"] = time.time()
             reward_type, amount = roulette_reward()
@@ -2501,11 +2384,7 @@ async def on_message(message: discord.Message) -> None:
                 raise ValueError("الهدف ما عنده فلوس.")
             protection_left = max(0, int(victim.get("protectionUntil", 0) - time.time()))
             if protection_left > 0:
-                await delayed_reply(
-                    message,
-                    embed=info_embed("الهدف عليه حماية", f"باقي على الحماية `{format_wait(protection_left)}`.\nهل تريد محاولة تجاوز الحماية مقابل `{STEAL_PROTECTED_COST}`؟", COLOR_WARNING),
-                    view=ProtectedStealConfirmView(message.author.id, target.id),
-                )
+                await delayed_reply(message, embed=info_embed("الهدف عليه حماية", f"باقي على الحماية `{format_wait(protection_left)}`.\nهل تريد محاولة تجاوز الحماية مقابل `{STEAL_PROTECTED_COST}`؟", COLOR_WARNING), view=ProtectedStealConfirmView(message.author.id, target.id))
                 return
             stolen = resolve_steal_amount(victim["money"])
             victim["money"] -= stolen
@@ -2535,8 +2414,9 @@ async def on_message(message: discord.Message) -> None:
                 raise ValueError(f"تحتاج `{total}` لشراء {quantity} شركة.")
             user["money"] -= total
             user["companies"] += quantity
+            user["lastCompanyIncome"] = time.time()
             save_user(user)
-            await delayed_reply(message, embed=card_embed("تم شراء شركة", f"{quantity} شركة مقابل {total}", COLOR_SUCCESS, "🏢"))
+            await delayed_reply(message, embed=card_embed("تم شراء شركة", f"{quantity} شركة مقابل {total}\nتعطيك كل شركة `{COMPANY_HOURLY_INCOME}` كل ساعة.", COLOR_SUCCESS, "🏢"))
             return
         if cmd == "بيع" and len(args) >= 2 and args[1] == "شركة":
             quantity = 1 if len(args) < 3 else parse_amount(args[2])
@@ -2555,28 +2435,28 @@ async def on_message(message: discord.Message) -> None:
             await delayed_reply(message, embed=card_embed("تم بيع الشركة", sale_text, COLOR_WARNING, "🏢"))
             return
         if cmd == "شراء":
-            if len(args) < 3:
-                raise ValueError("اكتب: شراء <العنصر> <الكمية>")
-            item = parse_buy_sell_item(args[1], message.author)
-            quantity = parse_amount(args[2])
-            total_price = item["buy_price"] * quantity
+            item_key, amount_or_all = parse_item_and_amount(args[1:])
+            if amount_or_all == "كل":
+                raise ValueError("الشراء يحتاج كمية رقمية.")
+            quantity = int(amount_or_all)
+            item = ITEM_DEFINITIONS[item_key]
+            total_price = get_current_buy_price(item_key) * quantity
             if user["money"] < total_price:
                 raise ValueError("فلوسك ما تكفي للشراء.")
             user["money"] -= total_price
-            user[item["key"]] += quantity
+            user[item_key] += quantity
             save_user(user)
             await delayed_reply(message, embed=card_embed("تم الشراء", f"{quantity} {item['label']} مقابل {total_price}", COLOR_SUCCESS, item["icon"]))
             return
         if cmd == "بيع":
-            if len(args) < 3:
-                raise ValueError("اكتب: بيع <العنصر> <الكمية/كل>")
-            item = parse_sell_item(args[1])
-            owned = user[item["key"]]
-            quantity = owned if args[2] == "كل" else parse_amount(args[2])
+            item_key, amount_or_all = parse_item_and_amount(args[1:])
+            item = ITEM_DEFINITIONS[item_key]
+            owned = user[item_key]
+            quantity = owned if amount_or_all == "كل" else int(amount_or_all)
             if quantity > owned:
                 raise ValueError("أنت ما تملك هذه الكمية.")
-            total_price = item["sell_price"] * quantity
-            user[item["key"]] -= quantity
+            total_price = get_current_sell_price(item_key) * quantity
+            user[item_key] -= quantity
             credit_money(user, total_price)
             save_user(user)
             await delayed_reply(message, embed=card_embed("تم البيع", f"{quantity} {item['label']} مقابل {total_price}", COLOR_WARNING, item["icon"]))
