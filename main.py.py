@@ -2206,11 +2206,19 @@ async def on_message(message: discord.Message) -> None:
                 await delayed_reply(message, embed=info_embed("الوظائف", "اكتب `وظيفة عسكري` راتبه 2000\nأو `وظيفة دكتور` راتبه 2500\nأو `وظيفة طيار` راتبه 3000\n\nتستلم الراتب كل 5 ساعات، وكل مرة تستلم راتب يزيد راتبك القادم 200.", COLOR_INFO))
                 return
             job = parse_job(args[1])
+            old_job = user.get("job")
             user["job"] = job
-            user["jobRaise"] = 0
-            user["lastJobSalary"] = 0
             save_user(user)
-            await delayed_reply(message, embed=info_embed("تم اختيار الوظيفة", f"وظيفتك الآن `{job}`.\nراتبك الأساسي `{JOBS[job]['salary']}` كل 5 ساعات.\nكل مرة تستلم راتب يزيد راتبك القادم 200.", COLOR_SUCCESS))
+            if old_job == job:
+                description = f"وظيفتك مسجلة بالفعل: `{job}`.\nوقت الراتب ما يتصفر بتكرار اختيار الوظيفة."
+            else:
+                description = (
+                    f"وظيفتك الآن `{job}`.\n"
+                    f"راتبك الأساسي `{JOBS[job]['salary']}` كل 5 ساعات.\n"
+                    "وقت الراتب ثابت بين كل الوظائف حتى لو غيرت وظيفتك.\n"
+                    "كل مرة تستلم راتب يزيد راتبك القادم 200."
+                )
+            await delayed_reply(message, embed=info_embed("تم اختيار الوظيفة", description, COLOR_SUCCESS))
             return
         if cmd == "راتب":
             await handle_salary(message, user)
